@@ -6,6 +6,8 @@
     "orientation": "portrait",
     "icon": "./assets/icon.png",
     "userInterfaceStyle": "light",
+    "scheme": "intellifleet",
+    "newArchEnabled": true,
     "ios": {
       "supportsTablet": true
     },
@@ -19,7 +21,18 @@
       "predictiveBackGestureEnabled": false
     },
     "web": {
-      "favicon": "./assets/favicon.png"
-    }
+      "favicon": "./assets/favicon.png",
+      "bundler": "metro"
+    },
+    "plugins": [
+      "expo-router",
+      [
+        "expo-image-picker",
+        {
+          "photosPermission": "IntelliFleet a besoin d'accéder à vos photos pour joindre les justificatifs d'un plein.",
+          "cameraPermission": "IntelliFleet a besoin de la caméra pour prendre les photos d'un plein."
+        }
+      ]
+    ]
   }
 }
