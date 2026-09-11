@@ -33,6 +33,60 @@ export async function createLogbookEntry(input: NewLogbookEntryInput): Promise<L
   return data;
 }
 
+export type LogbookEntryWithPhoto = LogbookEntry & { photoSignedUrl: string | null };
+
+/** Charge un relevé existant + URL signée (1h) de sa photo, pour l'écran d'édition. */
+export async function getLogbookEntry(id: string): Promise<LogbookEntryWithPhoto> {
+  const { data, error } = await supabase.from('logbook_entries').select('*').eq('id', id).single();
+  if (error) throw error;
+
+  let photoSignedUrl: string | null = null;
+  if (data.photo_storage_path) {
+    const { data: signedData, error: signError } = await supabase.storage
+      .from('logbook-photos')
+      .createSignedUrl(data.photo_storage_path, 3600);
+    if (signError) throw signError;
+    photoSignedUrl = signedData.signedUrl;
+  }
+
+  return { ...data, photoSignedUrl };
+}
+
+export async function updateLogbookEntry(id: string, input: NewLogbookEntryInput): Promise<LogbookEntry> {
+  const { data, error } = await supabase
+    .from('logbook_entries')
+    .update({
+      vehicle_id: input.vehicleId,
+      driver_id: input.driverId,
+      km: input.km,
+      event_date: input.eventDate,
+      comment: input.comment,
+    })
+    .eq('id', id)
+    .select()
+    .single();
+  if (error) throw error;
+  return data;
+}
+
+/** Supprime un relevé. Storage d'abord, puis la ligne DB (même ordre et même raison que deleteFuelEvent). */
+export async function deleteLogbookEntry(id: string): Promise<void> {
+  const { data: entry, error: fetchError } = await supabase
+    .from('logbook_entries')
+    .select('photo_storage_path')
+    .eq('id', id)
+    .single();
+  if (fetchError) throw fetchError;
+
+  if (entry?.photo_storage_path) {
+    const { error: removeError } = await supabase.storage.from('logbook-photos').remove([entry.photo_storage_path]);
+    if (removeError) throw removeError;
+  }
+
+  const { error } = await supabase.from('logbook_entries').delete().eq('id', id);
+  if (error) throw error;
+}
+
 /**
  * Upload (ou remplace) la photo d'un relevé. Chemin de stockage stable par relevé + upsert :
  * une reprise de photo écrase l'ancien blob en place, jamais d'orphelin (même stratégie que
