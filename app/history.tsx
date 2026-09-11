@@ -1,6 +1,6 @@
 import { useCallback, useState } from 'react';
-import { View, Text, StyleSheet, ActivityIndicator, ScrollView } from 'react-native';
-import { useFocusEffect } from 'expo-router';
+import { View, Text, Pressable, StyleSheet, ActivityIndicator, ScrollView } from 'react-native';
+import { useFocusEffect, useRouter } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useActiveVehicleId } from '@/src/hooks/useActiveVehicleId';
 import { listVehicles } from '@/src/features/vehicles/api';
@@ -65,6 +65,7 @@ function toTimeline(fuelEvents: LastFuelEvent[], logbookEntries: LogbookEntryWit
 }
 
 export default function HistoryScreen() {
+  const router = useRouter();
   const insets = useSafeAreaInsets();
   const { activeVehicleId, setActiveVehicleId, loaded: vehicleIdLoaded } = useActiveVehicleId();
   const [vehicles, setVehicles] = useState<Vehicle[]>([]);
@@ -130,7 +131,17 @@ export default function HistoryScreen() {
       )}
 
       {items.map((item) => (
-        <View key={`${item.kind}-${item.id}`} style={styles.row}>
+        <Pressable
+          key={`${item.kind}-${item.id}`}
+          style={styles.row}
+          onPress={() =>
+            router.push(
+              item.kind === 'fuel'
+                ? { pathname: '/new-fuel-event', params: { id: item.id } }
+                : { pathname: '/new-logbook-entry', params: { id: item.id } }
+            )
+          }
+        >
           <View style={[styles.dot, item.kind === 'fuel' ? styles.dotFuel : styles.dotLogbook]} />
           <View style={styles.rowContent}>
             <View style={styles.rowHeader}>
@@ -155,7 +166,7 @@ export default function HistoryScreen() {
             )}
             {item.driverName && <Text style={styles.rowLine}>Chauffeur : {item.driverName}</Text>}
           </View>
-        </View>
+        </Pressable>
       ))}
     </ScrollView>
   );
