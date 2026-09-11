@@ -1,3 +1,5 @@
+export type OcrPhotoKind = 'odometer' | 'receipt';
+
 export interface OcrFields {
   km?: number;
   liters?: number;
@@ -7,5 +9,5 @@ export interface OcrFields {
 
 export interface OcrService {
   isAvailable: boolean;
-  recognize(localUri: string): Promise<OcrFields>;
+  recognize(localUri: string, kind: OcrPhotoKind): Promise<OcrFields>;
 }
