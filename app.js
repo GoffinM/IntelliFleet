@@ -832,20 +832,20 @@ async function renderLogbookEntryForm(editingId, presetVehicleId) {
   });
 }
 
-// ---------- Service worker (app shell uniquement, pas de cache des appels Supabase) ----------
-
+// ---------- Service worker : DÉSACTIVÉ pendant la phase de debugging actif ----------
+// sw.js (skipWaiting/clients.claim/registration.update étaient déjà tous les trois en
+// place) a quand même produit trois épisodes de suite d'appareils bloqués sur une
+// ancienne version malgré des correctifs corrects — le mécanisme de mise à jour des
+// service workers a sa propre latence et ses propres couches de cache HTTP (navigateur
+// + hébergeur) qu'on ne maîtrise pas complètement. Le hors-ligne n'est de toute façon
+// pas dans le périmètre de cette tranche (voir doc de cadrage initiale). On désenregistre
+// activement tout SW existant à chaque chargement : garantit 100% réseau sans dépendre
+// du timing de mise à jour du navigateur. sw.js reste sur le disque, prêt à être
+// réactivé (avec une vraie stratégie de cache) une fois le hors-ligne réellement au
+// programme et le debug actif terminé.
 if ('serviceWorker' in navigator) {
-  window.addEventListener('load', () => {
-    navigator.serviceWorker
-      .register('./sw.js')
-      .then((registration) => {
-        // Force une vérification immédiate du contenu de sw.js à chaque ouverture de
-        // l'app, plutôt que d'attendre le cycle de vérification par défaut du
-        // navigateur (jusqu'à 24h) — sans ça, un correctif poussé peut ne jamais
-        // atteindre un appareil resté ouvert/rouvert dans l'intervalle.
-        registration.update();
-      })
-      .catch((e) => console.error('[IntelliFleet] sw register:', e));
+  navigator.serviceWorker.getRegistrations().then((registrations) => {
+    registrations.forEach((registration) => registration.unregister());
   });
 }
 
