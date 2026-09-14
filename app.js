@@ -192,10 +192,38 @@ async function route() {
 }
 
 window.addEventListener('hashchange', route);
-supabase.auth.onAuthStateChange((event) => {
-  // DIAGNOSTIC — supabase-js peut déclencher ceci de lui-même (rafraîchissement de
-  // session) au retour de visibilité de l'onglet, sans qu'on l'ait câblé nous-mêmes.
+
+// Confirmé par test réel : supabase-js réémet SIGNED_IN au retour de visibilité de
+// l'onglet (ex. retour de l'appareil photo natif) même sans changement réel
+// d'utilisateur, ce qui redéclenchait route() et re-rendait tout l'écran (vidant
+// .photo-slot du DOM pendant qu'un événement "change" de photo était en attente).
+//
+// Liste réelle des événements AuthChangeEvent (vérifiée dans les types de
+// @supabase/auth-js@2.116.0, la version effectivement chargée) : INITIAL_SESSION,
+// SIGNED_IN, SIGNED_OUT, TOKEN_REFRESHED, USER_UPDATED, PASSWORD_RECOVERY,
+// MFA_CHALLENGE_VERIFIED. Seuls SIGNED_IN/SIGNED_OUT correspondent à un changement de
+// connexion pertinent pour le routing — TOKEN_REFRESHED (rafraîchissement silencieux
+// du jeton), USER_UPDATED, PASSWORD_RECOVERY et MFA_CHALLENGE_VERIFIED sont ignorés.
+// INITIAL_SESSION est déjà géré par l'appel explicite route() au démarrage, donc
+// seulement mémorisé ici pour établir l'état de référence, sans re-router.
+//
+// Mais un filtre par nom d'événement seul ne suffit pas (SIGNED_IN peut être
+// redondant) : on ne re-route que si l'utilisateur réellement connecté a changé.
+let lastKnownUserId;
+supabase.auth.onAuthStateChange((event, session) => {
   showPhotoDiagnostic(`onAuthStateChange déclenché : event="${event}", hash="${location.hash}"`);
+
+  const currentUserId = session?.user?.id ?? null;
+
+  if (event === 'INITIAL_SESSION') {
+    lastKnownUserId = currentUserId;
+    return;
+  }
+
+  if (event !== 'SIGNED_IN' && event !== 'SIGNED_OUT') return;
+  if (currentUserId === lastKnownUserId) return; // même utilisateur : pas un vrai changement
+
+  lastKnownUserId = currentUserId;
   route();
 });
 
