@@ -1,11 +1,10 @@
-// Avertissement non bloquant (même esprit que l'avertissement montant/litres du plein) :
-// signale un km qui semble incohérent avec le dernier km connu du véhicule, sans jamais
-// empêcher l'enregistrement. Recalculé en continu à partir de la valeur du champ km,
-// qu'elle vienne d'un pré-remplissage OCR ou d'une saisie manuelle.
+// Port direct de src/features/vehicles/kmConsistency.ts (version React Native).
+// Avertissement non bloquant : signale un km incohérent avec le dernier km connu du
+// véhicule, sans jamais empêcher l'enregistrement.
 
 const LARGE_JUMP_RATIO = 0.5; // 50 % : seuil volontairement large, juste un signal discret
 
-export function checkKmConsistency(newKm: number, currentKm: number): string | null {
+export function checkKmConsistency(newKm, currentKm) {
   if (Number.isNaN(newKm) || Number.isNaN(currentKm)) return null;
 
   if (newKm < currentKm) {
