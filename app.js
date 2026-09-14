@@ -79,6 +79,13 @@ function showPhotoDiagnostic(message) {
   renderPhotoDiagBanner();
 }
 
+// PREUVE DIRECTE (temporaire) : s'exécute à chaque évaluation de app.js, donc à
+// chaque chargement OU rechargement complet de la page. Si un rechargement silencieux
+// se produit pendant que l'appli caméra a le premier plan, cette ligne réapparaîtra
+// une deuxième fois dans le journal, juste avant le prochain "Photo reçue (caméra)" —
+// preuve non ambiguë, avant de corriger quoi que ce soit sur cette base.
+showPhotoDiagnostic(`Page/app.js chargé, hash actuel : "${location.hash}"`);
+
 // ---------- Helpers génériques ----------
 
 function escapeHtml(value) {
