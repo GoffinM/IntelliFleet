@@ -24,68 +24,6 @@ const ACTIVE_VEHICLE_KEY = 'intellifleet:active_vehicle_id';
 const AMOUNT_TOLERANCE_RATIO = 0.005; // 0.5 %
 const AMOUNT_TOLERANCE_FLOOR_RWF = 5;
 
-// ---------- Diagnostic capture photo (temporaire) ----------
-// Stocké dans sessionStorage (pas juste en mémoire) : si la page se recharge
-// silencieusement pendant que l'appli caméra a le premier plan (scénario connu sur
-// mobile), le journal survit et s'affiche quand même au retour sur la page — sinon
-// on ne verrait jamais la dernière ligne juste avant un éventuel rechargement.
-const PHOTO_DIAG_KEY = 'intellifleet:photo-diag-log';
-
-function loadPhotoDiagLog() {
-  try {
-    return JSON.parse(sessionStorage.getItem(PHOTO_DIAG_KEY) || '[]');
-  } catch {
-    return [];
-  }
-}
-
-function savePhotoDiagLog(log) {
-  try {
-    sessionStorage.setItem(PHOTO_DIAG_KEY, JSON.stringify(log.slice(-30)));
-  } catch {
-    // best-effort, ne doit jamais casser le flux principal
-  }
-}
-
-function renderPhotoDiagBanner() {
-  let banner = document.getElementById('photo-diag');
-  const log = loadPhotoDiagLog();
-  if (log.length === 0) {
-    banner?.remove();
-    return;
-  }
-  if (!banner) {
-    banner = document.createElement('div');
-    banner.id = 'photo-diag';
-    banner.style.cssText =
-      'position:fixed;bottom:0;left:0;right:0;max-height:35vh;overflow:auto;' +
-      'background:#111827;color:#facc15;font:11px/1.4 monospace;padding:8px 10px 24px;' +
-      'white-space:pre-wrap;z-index:99999;border-top:3px solid #facc15;';
-    banner.title = 'Touchez pour effacer ce journal de diagnostic';
-    banner.addEventListener('click', () => {
-      savePhotoDiagLog([]);
-      renderPhotoDiagBanner();
-    });
-    document.body.appendChild(banner);
-  }
-  banner.textContent = `DIAGNOSTIC PHOTO (${log.length}, touchez pour effacer) :\n` + log.slice().reverse().join('\n---\n');
-}
-
-function showPhotoDiagnostic(message) {
-  const time = new Date().toLocaleTimeString('fr-FR');
-  const log = loadPhotoDiagLog();
-  log.push(`[${time}] ${message}`);
-  savePhotoDiagLog(log);
-  renderPhotoDiagBanner();
-}
-
-// PREUVE DIRECTE (temporaire) : s'exécute à chaque évaluation de app.js, donc à
-// chaque chargement OU rechargement complet de la page. Si un rechargement silencieux
-// se produit pendant que l'appli caméra a le premier plan, cette ligne réapparaîtra
-// une deuxième fois dans le journal, juste avant le prochain "Photo reçue (caméra)" —
-// preuve non ambiguë, avant de corriger quoi que ce soit sur cette base.
-showPhotoDiagnostic(`Page/app.js chargé, hash actuel : "${location.hash}"`);
-
 // ---------- Helpers génériques ----------
 
 function escapeHtml(value) {
@@ -159,12 +97,6 @@ function parseHash() {
 }
 
 async function route() {
-  // DIAGNOSTIC — chaque appel à route() re-render tout l'écran courant (setLoading()
-  // vide #app le temps du chargement). Objectif : voir si route() est appelée une
-  // deuxième fois pendant que l'appareil photo a le premier plan, sans rechargement
-  // de page (ex. via onAuthStateChange déclenché par un rafraîchissement de session).
-  showPhotoDiagnostic(`route() appelée, hash="${location.hash}"`);
-
   const {
     data: { session },
   } = await supabase.auth.getSession();
@@ -193,44 +125,14 @@ async function route() {
 
 window.addEventListener('hashchange', route);
 
-// Confirmé par test réel : supabase-js réémet SIGNED_IN au retour de visibilité de
-// l'onglet (ex. retour de l'appareil photo natif) même sans changement réel
-// d'utilisateur, ce qui redéclenchait route() et re-rendait tout l'écran (vidant
-// .photo-slot du DOM pendant qu'un événement "change" de photo était en attente).
-//
-// Liste réelle des événements AuthChangeEvent (vérifiée dans les types de
-// @supabase/auth-js@2.116.0, la version effectivement chargée) : INITIAL_SESSION,
-// SIGNED_IN, SIGNED_OUT, TOKEN_REFRESHED, USER_UPDATED, PASSWORD_RECOVERY,
-// MFA_CHALLENGE_VERIFIED. Seuls SIGNED_IN/SIGNED_OUT correspondent à un changement de
-// connexion pertinent pour le routing — TOKEN_REFRESHED (rafraîchissement silencieux
-// du jeton), USER_UPDATED, PASSWORD_RECOVERY et MFA_CHALLENGE_VERIFIED sont ignorés.
-// INITIAL_SESSION est déjà géré par l'appel explicite route() au démarrage, donc
-// seulement mémorisé ici pour établir l'état de référence, sans re-router.
-//
-// Mais un filtre par nom d'événement seul ne suffit pas (SIGNED_IN peut être
-// redondant) : on ne re-route que si l'utilisateur réellement connecté a changé.
-let lastKnownUserId;
-supabase.auth.onAuthStateChange((event, session) => {
-  const currentUserId = session?.user?.id ?? null;
-
-  // DIAGNOSTIC — affiche explicitement les deux valeurs comparées par le garde-fou,
-  // à CHAQUE déclenchement (y compris INITIAL_SESSION), pour vérifier si
-  // lastKnownUserId a bien la valeur attendue au moment du test plutôt que de
-  // supposer que le garde-fou fonctionne comme prévu.
-  showPhotoDiagnostic(
-    `onAuthStateChange : event="${event}", currentUserId="${currentUserId}", ` +
-      `lastKnownUserId="${lastKnownUserId}", égal=${currentUserId === lastKnownUserId}, hash="${location.hash}"`
-  );
-
-  if (event === 'INITIAL_SESSION') {
-    lastKnownUserId = currentUserId;
-    return;
-  }
-
-  if (event !== 'SIGNED_IN' && event !== 'SIGNED_OUT') return;
-  if (currentUserId === lastKnownUserId) return; // même utilisateur : pas un vrai changement
-
-  lastKnownUserId = currentUserId;
+// Un re-render déclenché par route() est maintenant sans risque (les écrans se
+// redessinent depuis leur état en mémoire, y compris les photos — voir
+// renderFuelEventForm/renderLogbookEntryForm) : pas besoin de filtrage complexe sur
+// l'identité de l'utilisateur. On ignore juste INITIAL_SESSION (déjà géré par l'appel
+// explicite route() au démarrage) et TOKEN_REFRESHED (rafraîchissement silencieux du
+// jeton, aucun effet sur le routing) pour éviter du travail inutile.
+supabase.auth.onAuthStateChange((event) => {
+  if (event === 'INITIAL_SESSION' || event === 'TOKEN_REFRESHED') return;
   route();
 });
 
@@ -449,6 +351,14 @@ async function renderHistory() {
 }
 
 // ---------- Photo slots (partagé plein/relevé) ----------
+//
+// Principe (aligné sur le modèle Calepin) : l'aperçu d'une photo n'est jamais posé
+// directement sur un élément DOM précis. Dès qu'un fichier est choisi, son URL de
+// prévisualisation est stockée dans le MÊME état que le fichier lui-même, puis
+// l'écran appelant se redessine entièrement depuis cet état (la fonction qui
+// construit le HTML au chargement, rappelée telle quelle). Un re-render déclenché
+// pour n'importe quelle autre raison (changement de véhicule, événement Supabase...)
+// redessine donc toujours le bon aperçu au lieu de risquer de le perdre.
 
 function photoSlotHtml(type, label, previewUrl, fullWidth) {
   const camId = `photo-${type}-cam`;
@@ -467,55 +377,13 @@ function photoSlotHtml(type, label, previewUrl, fullWidth) {
   `;
 }
 
-function setPhotoSlotPreview(type, url) {
-  const slot = document.querySelector(`.photo-slot[data-type="${type}"]`);
-  if (!slot) {
-    showPhotoDiagnostic(`setPhotoSlotPreview(${type}) : AUCUN .photo-slot[data-type="${type}"] dans le DOM — rien mis à jour.`);
-    return;
-  }
-  const existingImg = slot.querySelector('img');
-  const placeholder = slot.querySelector('.placeholder');
-  if (existingImg) {
-    existingImg.src = url;
-  } else if (placeholder) {
-    const img = document.createElement('img');
-    img.src = url;
-    placeholder.replaceWith(img);
-  } else {
-    // Cas qui ne devrait jamais arriver vu le HTML généré, mais qui expliquerait
-    // exactement le symptôme "aucune erreur, mais rien à l'écran" si ça se produit :
-    // ni <img> ni .placeholder trouvé dans le slot, donc aucune branche ne s'exécute.
-    showPhotoDiagnostic(`setPhotoSlotPreview(${type}) : ni <img> ni .placeholder trouvé dans le slot — rien mis à jour.`);
-  }
-  const camLabel = slot.querySelector(`label[for="photo-${type}-cam"]`);
-  if (camLabel) camLabel.textContent = 'Reprendre';
-}
-
 /** Attache les listeners des inputs file d'un ensemble de photo-slots. onPicked(type, file). */
 function wirePhotoInputs(container, onPicked) {
   container.querySelectorAll('input[type="file"]').forEach((input) => {
-    const type = input.dataset.type;
-    const source = input.hasAttribute('capture') ? 'caméra' : 'galerie';
-
     input.addEventListener('change', (e) => {
-      const files = e.target.files;
-      if (!files || files.length === 0) {
-        showPhotoDiagnostic(`change reçu (${type}, ${source}) mais AUCUN fichier (files.length=${files ? files.length : 'null'}).`);
-        return;
-      }
-      const file = files[0];
-      const currentScreen = document.querySelector('h1')?.textContent ?? '(aucun h1 trouvé)';
-      showPhotoDiagnostic(
-        `Photo reçue (${type}, ${source}) :\nnom="${file.name}"\ntaille=${file.size} o\ntype MIME="${file.type}"\n` +
-          `hash actuel="${location.hash}"\nécran actuel (h1)="${currentScreen}"`
-      );
-      try {
-        const previewUrl = URL.createObjectURL(file);
-        setPhotoSlotPreview(type, previewUrl);
-      } catch (err) {
-        showPhotoDiagnostic(`Erreur création aperçu (${type}) : ${err.name}: ${err.message}`);
-      }
-      onPicked(type, file);
+      const file = e.target.files?.[0];
+      if (!file) return;
+      onPicked(input.dataset.type, file);
     });
   });
 }
@@ -541,19 +409,97 @@ async function renderFuelEventForm(editingId, presetVehicleId) {
     station: existing ? (existing.station ?? '') : '',
     notes: existing ? (existing.notes ?? '') : '',
   };
-  // Photos : uri affichée (signée si existante, blob: locale si nouvellement choisie) +
-  // les fichiers réellement nouveaux à uploader (on ne réuploade jamais un emplacement
-  // inchangé).
-  const displayedPhotoUrl = {};
-  const newPhotoFiles = {};
-  if (existing) {
-    for (const type of Object.keys(existing.photos)) {
-      displayedPhotoUrl[type] = existing.photos[type].signedUrl;
-    }
+  // photoState[type] = { file, previewUrl }. file reste null tant que l'emplacement
+  // n'a pas été (re)pris — c'est ce qui indique, à l'enregistrement, quels
+  // emplacements réuploader (jamais ceux restés inchangés).
+  const photoState = {};
+  for (const { type } of PHOTO_TYPES) {
+    photoState[type] = { file: null, previewUrl: existing?.photos?.[type]?.signedUrl ?? null };
   }
 
   function currentVehicle() {
     return vehicles.find((v) => v.id === state.vehicleId) ?? null;
+  }
+
+  function renderForm() {
+    setContent(`
+      <h1>${editingId ? 'Modifier le plein' : 'Nouveau plein'}</h1>
+
+      <div class="section-label">Photos (optionnelles à la saisie)</div>
+      <div class="photo-grid" id="photo-grid">
+        ${PHOTO_TYPES.map(({ type, label }) => photoSlotHtml(type, label, photoState[type].previewUrl, false)).join('')}
+      </div>
+
+      <div class="section-label">Véhicule</div>
+      <div class="chip-row" id="vehicle-chips">${vehicleChipsHtml(vehicles, state.vehicleId)}</div>
+
+      <div class="section-label">Chauffeur (optionnel)</div>
+      <div class="chip-row" id="driver-chips">
+        <button class="chip ${state.driverId === null ? 'active' : ''}" data-id="">Aucun</button>
+        ${drivers.map((d) => `<button class="chip ${state.driverId === d.id ? 'active' : ''}" data-id="${d.id}">${escapeHtml(d.name)}</button>`).join('')}
+      </div>
+
+      <div class="section-label">Détails</div>
+      <div class="field"><label>Date (AAAA-MM-JJ)</label><input type="date" id="f-date" value="${state.eventDate}"></div>
+      <div class="field"><label>Km</label><input type="number" inputmode="numeric" id="f-km" value="${escapeHtml(state.km)}"></div>
+      <p class="warning" id="km-warning" hidden></p>
+      <div class="field"><label>Litres</label><input type="number" step="0.01" inputmode="decimal" id="f-liters" value="${escapeHtml(state.liters)}"></div>
+      <div class="field"><label>Prix unitaire (RWF/L)</label><input type="number" inputmode="numeric" id="f-unit-price" value="${escapeHtml(state.unitPrice)}"></div>
+      <div class="field"><label>Montant (RWF)</label><input type="number" inputmode="numeric" id="f-amount" value="${escapeHtml(state.amount)}"></div>
+      <p class="warning" id="amount-warning" hidden></p>
+      <div class="field"><label>Station</label><input type="text" id="f-station" value="${escapeHtml(state.station)}"></div>
+      <div class="field"><label>Notes</label><textarea id="f-notes">${escapeHtml(state.notes)}</textarea></div>
+
+      <p class="error" id="form-error" hidden></p>
+      <button class="btn btn-primary" id="btn-submit">${editingId ? 'Enregistrer les modifications' : 'Enregistrer'}</button>
+      ${editingId ? '<button class="btn btn-destructive" id="btn-delete">Supprimer ce plein</button>' : ''}
+      <a href="#/">← Annuler</a>
+    `);
+
+    renderKmWarning();
+    renderAmountWarning();
+
+    document.querySelectorAll('#vehicle-chips .chip').forEach((chip) => {
+      chip.addEventListener('click', () => {
+        state.vehicleId = chip.dataset.id;
+        document.querySelectorAll('#vehicle-chips .chip').forEach((c) => c.classList.toggle('active', c === chip));
+        renderKmWarning();
+      });
+    });
+    document.querySelectorAll('#driver-chips .chip').forEach((chip) => {
+      chip.addEventListener('click', () => {
+        state.driverId = chip.dataset.id || null;
+        document.querySelectorAll('#driver-chips .chip').forEach((c) => c.classList.toggle('active', c === chip));
+      });
+    });
+
+    document.getElementById('f-date').addEventListener('input', (e) => (state.eventDate = e.target.value));
+    document.getElementById('f-km').addEventListener('input', (e) => {
+      state.km = e.target.value;
+      renderKmWarning();
+    });
+    document.getElementById('f-liters').addEventListener('input', (e) => {
+      state.liters = e.target.value;
+      renderAmountWarning();
+    });
+    document.getElementById('f-unit-price').addEventListener('input', (e) => {
+      state.unitPrice = e.target.value;
+      renderAmountWarning();
+    });
+    document.getElementById('f-amount').addEventListener('input', (e) => {
+      state.amount = e.target.value;
+      renderAmountWarning();
+    });
+    document.getElementById('f-station').addEventListener('input', (e) => (state.station = e.target.value));
+    document.getElementById('f-notes').addEventListener('input', (e) => (state.notes = e.target.value));
+
+    wirePhotoInputs(document.getElementById('photo-grid'), (type, file) => {
+      photoState[type] = { ...photoState[type], file, previewUrl: URL.createObjectURL(file) };
+      renderForm();
+    });
+
+    document.getElementById('btn-submit').addEventListener('click', handleSubmit);
+    document.getElementById('btn-delete')?.addEventListener('click', handleDelete);
   }
 
   function renderKmWarning() {
@@ -573,85 +519,9 @@ async function renderFuelEventForm(editingId, presetVehicleId) {
     el.hidden = !warning;
   }
 
-  setContent(`
-    <h1>${editingId ? 'Modifier le plein' : 'Nouveau plein'}</h1>
-
-    <div class="section-label">Photos (optionnelles à la saisie)</div>
-    <div class="photo-grid" id="photo-grid">
-      ${PHOTO_TYPES.map(({ type, label }) => photoSlotHtml(type, label, displayedPhotoUrl[type] ?? null, false)).join('')}
-    </div>
-
-    <div class="section-label">Véhicule</div>
-    <div class="chip-row" id="vehicle-chips">${vehicleChipsHtml(vehicles, state.vehicleId)}</div>
-
-    <div class="section-label">Chauffeur (optionnel)</div>
-    <div class="chip-row" id="driver-chips">
-      <button class="chip ${state.driverId === null ? 'active' : ''}" data-id="">Aucun</button>
-      ${drivers.map((d) => `<button class="chip ${state.driverId === d.id ? 'active' : ''}" data-id="${d.id}">${escapeHtml(d.name)}</button>`).join('')}
-    </div>
-
-    <div class="section-label">Détails</div>
-    <div class="field"><label>Date (AAAA-MM-JJ)</label><input type="date" id="f-date" value="${state.eventDate}"></div>
-    <div class="field"><label>Km</label><input type="number" inputmode="numeric" id="f-km" value="${escapeHtml(state.km)}"></div>
-    <p class="warning" id="km-warning" hidden></p>
-    <div class="field"><label>Litres</label><input type="number" step="0.01" inputmode="decimal" id="f-liters" value="${escapeHtml(state.liters)}"></div>
-    <div class="field"><label>Prix unitaire (RWF/L)</label><input type="number" inputmode="numeric" id="f-unit-price" value="${escapeHtml(state.unitPrice)}"></div>
-    <div class="field"><label>Montant (RWF)</label><input type="number" inputmode="numeric" id="f-amount" value="${escapeHtml(state.amount)}"></div>
-    <p class="warning" id="amount-warning" hidden></p>
-    <div class="field"><label>Station</label><input type="text" id="f-station" value="${escapeHtml(state.station)}"></div>
-    <div class="field"><label>Notes</label><textarea id="f-notes">${escapeHtml(state.notes)}</textarea></div>
-
-    <p class="error" id="form-error" hidden></p>
-    <button class="btn btn-primary" id="btn-submit">${editingId ? 'Enregistrer les modifications' : 'Enregistrer'}</button>
-    ${editingId ? '<button class="btn btn-destructive" id="btn-delete">Supprimer ce plein</button>' : ''}
-    <a href="#/">← Annuler</a>
-  `);
-
-  renderKmWarning();
-  renderAmountWarning();
-
-  document.querySelectorAll('#vehicle-chips .chip').forEach((chip) => {
-    chip.addEventListener('click', () => {
-      state.vehicleId = chip.dataset.id;
-      document.querySelectorAll('#vehicle-chips .chip').forEach((c) => c.classList.toggle('active', c === chip));
-      renderKmWarning();
-    });
-  });
-  document.querySelectorAll('#driver-chips .chip').forEach((chip) => {
-    chip.addEventListener('click', () => {
-      state.driverId = chip.dataset.id || null;
-      document.querySelectorAll('#driver-chips .chip').forEach((c) => c.classList.toggle('active', c === chip));
-    });
-  });
-
-  document.getElementById('f-date').addEventListener('input', (e) => (state.eventDate = e.target.value));
-  document.getElementById('f-km').addEventListener('input', (e) => {
-    state.km = e.target.value;
-    renderKmWarning();
-  });
-  document.getElementById('f-liters').addEventListener('input', (e) => {
-    state.liters = e.target.value;
-    renderAmountWarning();
-  });
-  document.getElementById('f-unit-price').addEventListener('input', (e) => {
-    state.unitPrice = e.target.value;
-    renderAmountWarning();
-  });
-  document.getElementById('f-amount').addEventListener('input', (e) => {
-    state.amount = e.target.value;
-    renderAmountWarning();
-  });
-  document.getElementById('f-station').addEventListener('input', (e) => (state.station = e.target.value));
-  document.getElementById('f-notes').addEventListener('input', (e) => (state.notes = e.target.value));
-
-  wirePhotoInputs(document.getElementById('photo-grid'), (type, file) => {
-    newPhotoFiles[type] = file;
-  });
-
-  const errorEl = document.getElementById('form-error');
-  const submitBtn = document.getElementById('btn-submit');
-
-  submitBtn.addEventListener('click', async () => {
+  async function handleSubmit() {
+    const errorEl = document.getElementById('form-error');
+    const submitBtn = document.getElementById('btn-submit');
     errorEl.hidden = true;
     if (!state.vehicleId) {
       errorEl.textContent = 'Sélectionne un véhicule.';
@@ -689,9 +559,8 @@ async function renderFuelEventForm(editingId, presetVehicleId) {
       } = await supabase.auth.getUser();
       if (user) {
         for (const { type } of PHOTO_TYPES) {
-          const file = newPhotoFiles[type];
-          if (file) {
-            await uploadFuelEventPhoto({ fuelEventId: event.id, ownerId: user.id, type, file });
+          if (photoState[type].file) {
+            await uploadFuelEventPhoto({ fuelEventId: event.id, ownerId: user.id, type, file: photoState[type].file });
           }
         }
       }
@@ -700,14 +569,14 @@ async function renderFuelEventForm(editingId, presetVehicleId) {
     } catch (e) {
       errorEl.textContent = e.message || String(e);
       errorEl.hidden = false;
-    } finally {
       submitBtn.disabled = false;
       submitBtn.textContent = editingId ? 'Enregistrer les modifications' : 'Enregistrer';
     }
-  });
+  }
 
-  document.getElementById('btn-delete')?.addEventListener('click', async () => {
+  async function handleDelete() {
     if (!confirm('Supprimer ce plein ? Cette action est irréversible.')) return;
+    const errorEl = document.getElementById('form-error');
     try {
       await deleteFuelEvent(editingId);
       location.hash = '#/history';
@@ -715,7 +584,9 @@ async function renderFuelEventForm(editingId, presetVehicleId) {
       errorEl.textContent = e.message || String(e);
       errorEl.hidden = false;
     }
-  });
+  }
+
+  renderForm();
 }
 
 // ---------- Écran : nouveau/modifier relevé ----------
@@ -735,11 +606,74 @@ async function renderLogbookEntryForm(editingId, presetVehicleId) {
     km: existing ? String(existing.km) : '',
     comment: existing ? (existing.comment ?? '') : '',
   };
-  let newPhotoFile = null;
-  const displayedPhotoUrl = existing ? existing.photoSignedUrl : null;
+  const originalPhotoUrl = existing ? existing.photoSignedUrl : null;
+  const photo = { file: null, previewUrl: originalPhotoUrl };
 
   function currentVehicle() {
     return vehicles.find((v) => v.id === state.vehicleId) ?? null;
+  }
+
+  function renderForm() {
+    setContent(`
+      <h1>${editingId ? 'Modifier le relevé' : 'Nouveau relevé'}</h1>
+
+      <div class="section-label">Photo (optionnelle)</div>
+      <div class="photo-grid" id="photo-grid">
+        ${photoSlotHtml('odometer', 'Compteur', photo.previewUrl, true)}
+      </div>
+
+      <div class="section-label">Véhicule</div>
+      <div class="chip-row" id="vehicle-chips">${vehicleChipsHtml(vehicles, state.vehicleId)}</div>
+
+      <div class="section-label">Chauffeur (optionnel)</div>
+      <div class="chip-row" id="driver-chips">
+        <button class="chip ${state.driverId === null ? 'active' : ''}" data-id="">Aucun</button>
+        ${drivers.map((d) => `<button class="chip ${state.driverId === d.id ? 'active' : ''}" data-id="${d.id}">${escapeHtml(d.name)}</button>`).join('')}
+      </div>
+
+      <div class="section-label">Détails</div>
+      <div class="field"><label>Date (AAAA-MM-JJ)</label><input type="date" id="f-date" value="${state.eventDate}"></div>
+      <div class="field"><label>Km</label><input type="number" inputmode="numeric" id="f-km" value="${escapeHtml(state.km)}"></div>
+      <p class="warning" id="km-warning" hidden></p>
+      <div class="field"><label>Commentaire (optionnel)</label><textarea id="f-comment">${escapeHtml(state.comment)}</textarea></div>
+
+      <p class="error" id="form-error" hidden></p>
+      <button class="btn btn-primary" id="btn-submit">${editingId ? 'Enregistrer les modifications' : 'Enregistrer'}</button>
+      ${editingId ? '<button class="btn btn-destructive" id="btn-delete">Supprimer ce relevé</button>' : ''}
+      <a href="#/">← Annuler</a>
+    `);
+
+    renderKmWarning();
+
+    document.querySelectorAll('#vehicle-chips .chip').forEach((chip) => {
+      chip.addEventListener('click', () => {
+        state.vehicleId = chip.dataset.id;
+        document.querySelectorAll('#vehicle-chips .chip').forEach((c) => c.classList.toggle('active', c === chip));
+        renderKmWarning();
+      });
+    });
+    document.querySelectorAll('#driver-chips .chip').forEach((chip) => {
+      chip.addEventListener('click', () => {
+        state.driverId = chip.dataset.id || null;
+        document.querySelectorAll('#driver-chips .chip').forEach((c) => c.classList.toggle('active', c === chip));
+      });
+    });
+
+    document.getElementById('f-date').addEventListener('input', (e) => (state.eventDate = e.target.value));
+    document.getElementById('f-km').addEventListener('input', (e) => {
+      state.km = e.target.value;
+      renderKmWarning();
+    });
+    document.getElementById('f-comment').addEventListener('input', (e) => (state.comment = e.target.value));
+
+    wirePhotoInputs(document.getElementById('photo-grid'), (_type, file) => {
+      photo.file = file;
+      photo.previewUrl = URL.createObjectURL(file);
+      renderForm();
+    });
+
+    document.getElementById('btn-submit').addEventListener('click', handleSubmit);
+    document.getElementById('btn-delete')?.addEventListener('click', handleDelete);
   }
 
   function renderKmWarning() {
@@ -751,66 +685,9 @@ async function renderLogbookEntryForm(editingId, presetVehicleId) {
     el.hidden = !warning;
   }
 
-  setContent(`
-    <h1>${editingId ? 'Modifier le relevé' : 'Nouveau relevé'}</h1>
-
-    <div class="section-label">Photo (optionnelle)</div>
-    <div class="photo-grid" id="photo-grid">
-      ${photoSlotHtml('odometer', 'Compteur', displayedPhotoUrl, true)}
-    </div>
-
-    <div class="section-label">Véhicule</div>
-    <div class="chip-row" id="vehicle-chips">${vehicleChipsHtml(vehicles, state.vehicleId)}</div>
-
-    <div class="section-label">Chauffeur (optionnel)</div>
-    <div class="chip-row" id="driver-chips">
-      <button class="chip ${state.driverId === null ? 'active' : ''}" data-id="">Aucun</button>
-      ${drivers.map((d) => `<button class="chip ${state.driverId === d.id ? 'active' : ''}" data-id="${d.id}">${escapeHtml(d.name)}</button>`).join('')}
-    </div>
-
-    <div class="section-label">Détails</div>
-    <div class="field"><label>Date (AAAA-MM-JJ)</label><input type="date" id="f-date" value="${state.eventDate}"></div>
-    <div class="field"><label>Km</label><input type="number" inputmode="numeric" id="f-km" value="${escapeHtml(state.km)}"></div>
-    <p class="warning" id="km-warning" hidden></p>
-    <div class="field"><label>Commentaire (optionnel)</label><textarea id="f-comment">${escapeHtml(state.comment)}</textarea></div>
-
-    <p class="error" id="form-error" hidden></p>
-    <button class="btn btn-primary" id="btn-submit">${editingId ? 'Enregistrer les modifications' : 'Enregistrer'}</button>
-    ${editingId ? '<button class="btn btn-destructive" id="btn-delete">Supprimer ce relevé</button>' : ''}
-    <a href="#/">← Annuler</a>
-  `);
-
-  renderKmWarning();
-
-  document.querySelectorAll('#vehicle-chips .chip').forEach((chip) => {
-    chip.addEventListener('click', () => {
-      state.vehicleId = chip.dataset.id;
-      document.querySelectorAll('#vehicle-chips .chip').forEach((c) => c.classList.toggle('active', c === chip));
-      renderKmWarning();
-    });
-  });
-  document.querySelectorAll('#driver-chips .chip').forEach((chip) => {
-    chip.addEventListener('click', () => {
-      state.driverId = chip.dataset.id || null;
-      document.querySelectorAll('#driver-chips .chip').forEach((c) => c.classList.toggle('active', c === chip));
-    });
-  });
-
-  document.getElementById('f-date').addEventListener('input', (e) => (state.eventDate = e.target.value));
-  document.getElementById('f-km').addEventListener('input', (e) => {
-    state.km = e.target.value;
-    renderKmWarning();
-  });
-  document.getElementById('f-comment').addEventListener('input', (e) => (state.comment = e.target.value));
-
-  wirePhotoInputs(document.getElementById('photo-grid'), (_type, file) => {
-    newPhotoFile = file;
-  });
-
-  const errorEl = document.getElementById('form-error');
-  const submitBtn = document.getElementById('btn-submit');
-
-  submitBtn.addEventListener('click', async () => {
+  async function handleSubmit() {
+    const errorEl = document.getElementById('form-error');
+    const submitBtn = document.getElementById('btn-submit');
     errorEl.hidden = true;
     if (!state.vehicleId) {
       errorEl.textContent = 'Sélectionne un véhicule.';
@@ -836,12 +713,12 @@ async function renderLogbookEntryForm(editingId, presetVehicleId) {
       };
       const entry = editingId ? await updateLogbookEntry(editingId, input) : await createLogbookEntry(input);
 
-      if (newPhotoFile) {
+      if (photo.file) {
         const {
           data: { user },
         } = await supabase.auth.getUser();
         if (user) {
-          await uploadLogbookEntryPhoto({ logbookEntryId: entry.id, ownerId: user.id, file: newPhotoFile });
+          await uploadLogbookEntryPhoto({ logbookEntryId: entry.id, ownerId: user.id, file: photo.file });
         }
       }
 
@@ -849,14 +726,14 @@ async function renderLogbookEntryForm(editingId, presetVehicleId) {
     } catch (e) {
       errorEl.textContent = e.message || String(e);
       errorEl.hidden = false;
-    } finally {
       submitBtn.disabled = false;
       submitBtn.textContent = editingId ? 'Enregistrer les modifications' : 'Enregistrer';
     }
-  });
+  }
 
-  document.getElementById('btn-delete')?.addEventListener('click', async () => {
+  async function handleDelete() {
     if (!confirm('Supprimer ce relevé ? Cette action est irréversible.')) return;
+    const errorEl = document.getElementById('form-error');
     try {
       await deleteLogbookEntry(editingId);
       location.hash = '#/history';
@@ -864,20 +741,18 @@ async function renderLogbookEntryForm(editingId, presetVehicleId) {
       errorEl.textContent = e.message || String(e);
       errorEl.hidden = false;
     }
-  });
+  }
+
+  renderForm();
 }
 
-// ---------- Service worker : DÉSACTIVÉ pendant la phase de debugging actif ----------
-// sw.js (skipWaiting/clients.claim/registration.update étaient déjà tous les trois en
-// place) a quand même produit trois épisodes de suite d'appareils bloqués sur une
-// ancienne version malgré des correctifs corrects — le mécanisme de mise à jour des
-// service workers a sa propre latence et ses propres couches de cache HTTP (navigateur
-// + hébergeur) qu'on ne maîtrise pas complètement. Le hors-ligne n'est de toute façon
-// pas dans le périmètre de cette tranche (voir doc de cadrage initiale). On désenregistre
-// activement tout SW existant à chaque chargement : garantit 100% réseau sans dépendre
-// du timing de mise à jour du navigateur. sw.js reste sur le disque, prêt à être
-// réactivé (avec une vraie stratégie de cache) une fois le hors-ligne réellement au
-// programme et le debug actif terminé.
+// ---------- Service worker : désactivé pendant la phase de debugging actif ----------
+// Décision distincte du sujet photo ci-dessus : le mécanisme de mise à jour des
+// service workers (latence + caches HTTP navigateur/hébergeur) a produit plusieurs
+// épisodes d'appareils bloqués sur une ancienne version après déploiement. Le
+// hors-ligne n'est de toute façon pas dans le périmètre de cette tranche. On
+// désenregistre activement tout SW existant à chaque chargement — garantit 100%
+// réseau. sw.js reste sur le disque, prêt à être réactivé plus tard.
 if ('serviceWorker' in navigator) {
   navigator.serviceWorker.getRegistrations().then((registrations) => {
     registrations.forEach((registration) => registration.unregister());
@@ -886,5 +761,4 @@ if ('serviceWorker' in navigator) {
 
 // ---------- Démarrage ----------
 
-renderPhotoDiagBanner(); // rejoue le journal de diagnostic photo s'il en reste un
 route();
