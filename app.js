@@ -416,7 +416,10 @@ function photoSlotHtml(type, label, previewUrl, fullWidth) {
 
 function setPhotoSlotPreview(type, url) {
   const slot = document.querySelector(`.photo-slot[data-type="${type}"]`);
-  if (!slot) return;
+  if (!slot) {
+    showPhotoDiagnostic(`setPhotoSlotPreview(${type}) : AUCUN .photo-slot[data-type="${type}"] dans le DOM — rien mis à jour.`);
+    return;
+  }
   const existingImg = slot.querySelector('img');
   const placeholder = slot.querySelector('.placeholder');
   if (existingImg) {
@@ -425,6 +428,11 @@ function setPhotoSlotPreview(type, url) {
     const img = document.createElement('img');
     img.src = url;
     placeholder.replaceWith(img);
+  } else {
+    // Cas qui ne devrait jamais arriver vu le HTML généré, mais qui expliquerait
+    // exactement le symptôme "aucune erreur, mais rien à l'écran" si ça se produit :
+    // ni <img> ni .placeholder trouvé dans le slot, donc aucune branche ne s'exécute.
+    showPhotoDiagnostic(`setPhotoSlotPreview(${type}) : ni <img> ni .placeholder trouvé dans le slot — rien mis à jour.`);
   }
   const camLabel = slot.querySelector(`label[for="photo-${type}-cam"]`);
   if (camLabel) camLabel.textContent = 'Reprendre';
@@ -435,25 +443,6 @@ function wirePhotoInputs(container, onPicked) {
   container.querySelectorAll('input[type="file"]').forEach((input) => {
     const type = input.dataset.type;
     const source = input.hasAttribute('capture') ? 'caméra' : 'galerie';
-
-    // Log sur le <label> visible lui-même, AVANT tout ce qui dépend de la relation
-    // label -> input caché : vérifie si le tap sur le bouton "Prendre"/"Galerie" est
-    // seulement détecté par le DOM, indépendamment de ce que fait ensuite l'input.
-    const associatedLabel = container.querySelector(`label[for="${input.id}"]`);
-    if (associatedLabel) {
-      associatedLabel.addEventListener('click', () => {
-        showPhotoDiagnostic(`Tap détecté sur le bouton "${associatedLabel.textContent}" (${type}, ${source}).`);
-      });
-    } else {
-      showPhotoDiagnostic(`AUCUN <label for="${input.id}"> trouvé dans le DOM (${type}, ${source}).`);
-    }
-
-    // Log AVANT l'ouverture de l'appli caméra/galerie : si on ne voit jamais la ligne
-    // "reçu"/"aucun fichier" qui devrait suivre, ça prouve que la page a perdu son état
-    // JS (rechargement silencieux) pendant que la caméra avait le premier plan.
-    input.addEventListener('click', () => {
-      showPhotoDiagnostic(`Ouverture ${source} (${type})…`);
-    });
 
     input.addEventListener('change', (e) => {
       const files = e.target.files;
