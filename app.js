@@ -24,6 +24,61 @@ const ACTIVE_VEHICLE_KEY = 'intellifleet:active_vehicle_id';
 const AMOUNT_TOLERANCE_RATIO = 0.005; // 0.5 %
 const AMOUNT_TOLERANCE_FLOOR_RWF = 5;
 
+// ---------- Diagnostic capture photo (temporaire) ----------
+// Stocké dans sessionStorage (pas juste en mémoire) : si la page se recharge
+// silencieusement pendant que l'appli caméra a le premier plan (scénario connu sur
+// mobile), le journal survit et s'affiche quand même au retour sur la page — sinon
+// on ne verrait jamais la dernière ligne juste avant un éventuel rechargement.
+const PHOTO_DIAG_KEY = 'intellifleet:photo-diag-log';
+
+function loadPhotoDiagLog() {
+  try {
+    return JSON.parse(sessionStorage.getItem(PHOTO_DIAG_KEY) || '[]');
+  } catch {
+    return [];
+  }
+}
+
+function savePhotoDiagLog(log) {
+  try {
+    sessionStorage.setItem(PHOTO_DIAG_KEY, JSON.stringify(log.slice(-30)));
+  } catch {
+    // best-effort, ne doit jamais casser le flux principal
+  }
+}
+
+function renderPhotoDiagBanner() {
+  let banner = document.getElementById('photo-diag');
+  const log = loadPhotoDiagLog();
+  if (log.length === 0) {
+    banner?.remove();
+    return;
+  }
+  if (!banner) {
+    banner = document.createElement('div');
+    banner.id = 'photo-diag';
+    banner.style.cssText =
+      'position:fixed;bottom:0;left:0;right:0;max-height:35vh;overflow:auto;' +
+      'background:#111827;color:#facc15;font:11px/1.4 monospace;padding:8px 10px 24px;' +
+      'white-space:pre-wrap;z-index:99999;border-top:3px solid #facc15;';
+    banner.title = 'Touchez pour effacer ce journal de diagnostic';
+    banner.addEventListener('click', () => {
+      savePhotoDiagLog([]);
+      renderPhotoDiagBanner();
+    });
+    document.body.appendChild(banner);
+  }
+  banner.textContent = `DIAGNOSTIC PHOTO (${log.length}, touchez pour effacer) :\n` + log.slice().reverse().join('\n---\n');
+}
+
+function showPhotoDiagnostic(message) {
+  const time = new Date().toLocaleTimeString('fr-FR');
+  const log = loadPhotoDiagLog();
+  log.push(`[${time}] ${message}`);
+  savePhotoDiagLog(log);
+  renderPhotoDiagBanner();
+}
+
 // ---------- Helpers génériques ----------
 
 function escapeHtml(value) {
@@ -378,12 +433,32 @@ function setPhotoSlotPreview(type, url) {
 /** Attache les listeners des inputs file d'un ensemble de photo-slots. onPicked(type, file). */
 function wirePhotoInputs(container, onPicked) {
   container.querySelectorAll('input[type="file"]').forEach((input) => {
+    const type = input.dataset.type;
+    const source = input.hasAttribute('capture') ? 'caméra' : 'galerie';
+
+    // Log AVANT l'ouverture de l'appli caméra/galerie : si on ne voit jamais la ligne
+    // "reçu"/"aucun fichier" qui devrait suivre, ça prouve que la page a perdu son état
+    // JS (rechargement silencieux) pendant que la caméra avait le premier plan.
+    input.addEventListener('click', () => {
+      showPhotoDiagnostic(`Ouverture ${source} (${type})…`);
+    });
+
     input.addEventListener('change', (e) => {
-      const file = e.target.files[0];
-      if (!file) return;
-      const type = input.dataset.type;
-      const previewUrl = URL.createObjectURL(file);
-      setPhotoSlotPreview(type, previewUrl);
+      const files = e.target.files;
+      if (!files || files.length === 0) {
+        showPhotoDiagnostic(`change reçu (${type}, ${source}) mais AUCUN fichier (files.length=${files ? files.length : 'null'}).`);
+        return;
+      }
+      const file = files[0];
+      showPhotoDiagnostic(
+        `Photo reçue (${type}, ${source}) :\nnom="${file.name}"\ntaille=${file.size} o\ntype MIME="${file.type}"`
+      );
+      try {
+        const previewUrl = URL.createObjectURL(file);
+        setPhotoSlotPreview(type, previewUrl);
+      } catch (err) {
+        showPhotoDiagnostic(`Erreur création aperçu (${type}) : ${err.name}: ${err.message}`);
+      }
       onPicked(type, file);
     });
   });
@@ -746,4 +821,5 @@ if ('serviceWorker' in navigator) {
 
 // ---------- Démarrage ----------
 
+renderPhotoDiagBanner(); // rejoue le journal de diagnostic photo s'il en reste un
 route();
