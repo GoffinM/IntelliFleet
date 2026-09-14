@@ -827,7 +827,16 @@ async function renderLogbookEntryForm(editingId, presetVehicleId) {
 
 if ('serviceWorker' in navigator) {
   window.addEventListener('load', () => {
-    navigator.serviceWorker.register('./sw.js').catch((e) => console.error('[IntelliFleet] sw register:', e));
+    navigator.serviceWorker
+      .register('./sw.js')
+      .then((registration) => {
+        // Force une vérification immédiate du contenu de sw.js à chaque ouverture de
+        // l'app, plutôt que d'attendre le cycle de vérification par défaut du
+        // navigateur (jusqu'à 24h) — sans ça, un correctif poussé peut ne jamais
+        // atteindre un appareil resté ouvert/rouvert dans l'intervalle.
+        registration.update();
+      })
+      .catch((e) => console.error('[IntelliFleet] sw register:', e));
   });
 }
 
