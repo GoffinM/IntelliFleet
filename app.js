@@ -159,6 +159,12 @@ function parseHash() {
 }
 
 async function route() {
+  // DIAGNOSTIC — chaque appel à route() re-render tout l'écran courant (setLoading()
+  // vide #app le temps du chargement). Objectif : voir si route() est appelée une
+  // deuxième fois pendant que l'appareil photo a le premier plan, sans rechargement
+  // de page (ex. via onAuthStateChange déclenché par un rafraîchissement de session).
+  showPhotoDiagnostic(`route() appelée, hash="${location.hash}"`);
+
   const {
     data: { session },
   } = await supabase.auth.getSession();
@@ -186,7 +192,12 @@ async function route() {
 }
 
 window.addEventListener('hashchange', route);
-supabase.auth.onAuthStateChange(() => route());
+supabase.auth.onAuthStateChange((event) => {
+  // DIAGNOSTIC — supabase-js peut déclencher ceci de lui-même (rafraîchissement de
+  // session) au retour de visibilité de l'onglet, sans qu'on l'ait câblé nous-mêmes.
+  showPhotoDiagnostic(`onAuthStateChange déclenché : event="${event}", hash="${location.hash}"`);
+  route();
+});
 
 // ---------- Écran : login ----------
 
@@ -458,8 +469,10 @@ function wirePhotoInputs(container, onPicked) {
         return;
       }
       const file = files[0];
+      const currentScreen = document.querySelector('h1')?.textContent ?? '(aucun h1 trouvé)';
       showPhotoDiagnostic(
-        `Photo reçue (${type}, ${source}) :\nnom="${file.name}"\ntaille=${file.size} o\ntype MIME="${file.type}"`
+        `Photo reçue (${type}, ${source}) :\nnom="${file.name}"\ntaille=${file.size} o\ntype MIME="${file.type}"\n` +
+          `hash actuel="${location.hash}"\nécran actuel (h1)="${currentScreen}"`
       );
       try {
         const previewUrl = URL.createObjectURL(file);
