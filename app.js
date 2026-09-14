@@ -436,6 +436,18 @@ function wirePhotoInputs(container, onPicked) {
     const type = input.dataset.type;
     const source = input.hasAttribute('capture') ? 'caméra' : 'galerie';
 
+    // Log sur le <label> visible lui-même, AVANT tout ce qui dépend de la relation
+    // label -> input caché : vérifie si le tap sur le bouton "Prendre"/"Galerie" est
+    // seulement détecté par le DOM, indépendamment de ce que fait ensuite l'input.
+    const associatedLabel = container.querySelector(`label[for="${input.id}"]`);
+    if (associatedLabel) {
+      associatedLabel.addEventListener('click', () => {
+        showPhotoDiagnostic(`Tap détecté sur le bouton "${associatedLabel.textContent}" (${type}, ${source}).`);
+      });
+    } else {
+      showPhotoDiagnostic(`AUCUN <label for="${input.id}"> trouvé dans le DOM (${type}, ${source}).`);
+    }
+
     // Log AVANT l'ouverture de l'appli caméra/galerie : si on ne voit jamais la ligne
     // "reçu"/"aucun fichier" qui devrait suivre, ça prouve que la page a perdu son état
     // JS (rechargement silencieux) pendant que la caméra avait le premier plan.
