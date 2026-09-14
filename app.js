@@ -211,9 +211,16 @@ window.addEventListener('hashchange', route);
 // redondant) : on ne re-route que si l'utilisateur réellement connecté a changé.
 let lastKnownUserId;
 supabase.auth.onAuthStateChange((event, session) => {
-  showPhotoDiagnostic(`onAuthStateChange déclenché : event="${event}", hash="${location.hash}"`);
-
   const currentUserId = session?.user?.id ?? null;
+
+  // DIAGNOSTIC — affiche explicitement les deux valeurs comparées par le garde-fou,
+  // à CHAQUE déclenchement (y compris INITIAL_SESSION), pour vérifier si
+  // lastKnownUserId a bien la valeur attendue au moment du test plutôt que de
+  // supposer que le garde-fou fonctionne comme prévu.
+  showPhotoDiagnostic(
+    `onAuthStateChange : event="${event}", currentUserId="${currentUserId}", ` +
+      `lastKnownUserId="${lastKnownUserId}", égal=${currentUserId === lastKnownUserId}, hash="${location.hash}"`
+  );
 
   if (event === 'INITIAL_SESSION') {
     lastKnownUserId = currentUserId;
