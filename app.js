@@ -96,6 +96,19 @@ function parseHash() {
   return { segments, query };
 }
 
+// Clé du dernier écran pleinement construit (statut de connexion + hash). route()
+// peut être rappelée pour de multiples raisons sans rapport avec une vraie navigation
+// (ex. supabase-js réémet des événements d'auth au retour de visibilité de l'onglet)
+// — la correction se fait ici, à la source, une fois pour toutes : si ni le hash ni
+// le statut de connexion n'ont réellement changé, on ne reconstruit rien, plutôt que
+// de traquer chaque déclencheur individuel au cas par cas.
+//
+// Le contrôle se fait APRÈS la logique de redirection (pas avant) : le statut de
+// connexion fait partie de la clé précisément pour que la transition login -> accueil
+// (où le hash reste "#/login" jusqu'à ce que la redirection elle-même le change) ne
+// soit jamais bloquée par ce garde-fou.
+let lastRenderedKey;
+
 async function route() {
   const {
     data: { session },
@@ -111,6 +124,10 @@ async function route() {
     location.hash = '#/';
     return;
   }
+
+  const key = `${session ? 'in' : 'out'}:${location.hash}`;
+  if (key === lastRenderedKey) return; // même écran déjà affiché, rien à refaire
+  lastRenderedKey = key;
 
   try {
     if (page === 'login') return renderLogin();
