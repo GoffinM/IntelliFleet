@@ -24,6 +24,41 @@ export async function listDrivers() {
   return data;
 }
 
+/** Création admin only côté RLS (0005_fleet_multi_user.sql) — l'UI n'est qu'une commodité. */
+export async function createVehicle(input) {
+  const { data, error } = await supabase
+    .from('vehicles')
+    .insert({
+      name: input.name,
+      plate: input.plate,
+      make: input.make,
+      model: input.model,
+      year: input.year,
+      initial_km: input.initialKm,
+      tank_capacity_liters: input.tankCapacityLiters,
+    })
+    .select()
+    .single();
+  if (error) throw error;
+  return data;
+}
+
+/** Création admin only côté RLS (0005_fleet_multi_user.sql) — l'UI n'est qu'une commodité. */
+export async function createDriver(input) {
+  const { data, error } = await supabase.from('drivers').insert({ name: input.name }).select().single();
+  if (error) throw error;
+  return data;
+}
+
+// ---------- Profils (0005_fleet_multi_user.sql) ----------
+
+/** Profil (role admin/driver) de l'utilisateur connecté. null si aucune ligne (compte non configuré). */
+export async function getMyProfile(userId) {
+  const { data, error } = await supabase.from('profiles').select('*').eq('id', userId).maybeSingle();
+  if (error) throw error;
+  return data;
+}
+
 // ---------- Fuel events ----------
 
 function mapFuelEventRow(row) {
@@ -259,4 +294,166 @@ export async function deleteLogbookEntry(id) {
 
   const { error } = await supabase.from('logbook_entries').delete().eq('id', id);
   if (error) throw error;
+}
+
+// ---------- Validation admin (0005_fleet_multi_user.sql) ----------
+
+async function signPhoto(bucket, path) {
+  const { data, error } = await supabase.storage.from(bucket).createSignedUrl(path, 3600);
+  if (error) throw error;
+  return data.signedUrl;
+}
+
+async function mapValidationFuelRow(row) {
+  const photos = await Promise.all(
+    (row.photos ?? []).map(async (p) => ({ type: p.type, signedUrl: await signPhoto('fuel-photos', p.storage_path) }))
+  );
+  return {
+    kind: 'fuel',
+    id: row.id,
+    date: row.event_date,
+    createdAt: row.created_at,
+    km: row.km,
+    liters: row.liters,
+    amount: row.amount,
+    vehicleName: row.vehicles?.name ?? '',
+    driverName: row.drivers?.name ?? null,
+    validatedAt: row.validated_at,
+    photos,
+  };
+}
+
+async function mapValidationLogbookRow(row) {
+  const photos = row.photo_storage_path
+    ? [{ type: 'odometer', signedUrl: await signPhoto('logbook-photos', row.photo_storage_path) }]
+    : [];
+  return {
+    kind: 'logbook',
+    id: row.id,
+    date: row.event_date,
+    createdAt: row.created_at,
+    km: row.km,
+    liters: null,
+    amount: null,
+    vehicleName: row.vehicles?.name ?? '',
+    driverName: row.drivers?.name ?? null,
+    validatedAt: row.validated_at,
+    photos,
+  };
+}
+
+export async function listUnvalidatedFuelEvents() {
+  const { data, error } = await supabase
+    .from('fuel_events')
+    .select('*, vehicles(name), drivers(name), photos(type, storage_path)')
+    .is('validated_at', null)
+    .order('event_date', { ascending: false });
+  if (error) throw error;
+  return Promise.all((data ?? []).map(mapValidationFuelRow));
+}
+
+export async function listUnvalidatedLogbookEntries() {
+  const { data, error } = await supabase
+    .from('logbook_entries')
+    .select('*, vehicles(name), drivers(name)')
+    .is('validated_at', null)
+    .order('event_date', { ascending: false });
+  if (error) throw error;
+  return Promise.all((data ?? []).map(mapValidationLogbookRow));
+}
+
+/** Les N entrées validées le plus récemment, tous chauffeurs confondus — sert à afficher
+ *  le bouton "Supprimer les photos" sans avoir à lister indéfiniment tout l'historique. */
+export async function listRecentlyValidatedFuelEvents(limit = 20) {
+  const { data, error } = await supabase
+    .from('fuel_events')
+    .select('*, vehicles(name), drivers(name), photos(type, storage_path)')
+    .not('validated_at', 'is', null)
+    .order('validated_at', { ascending: false })
+    .limit(limit);
+  if (error) throw error;
+  return Promise.all((data ?? []).map(mapValidationFuelRow));
+}
+
+export async function listRecentlyValidatedLogbookEntries(limit = 20) {
+  const { data, error } = await supabase
+    .from('logbook_entries')
+    .select('*, vehicles(name), drivers(name)')
+    .not('validated_at', 'is', null)
+    .order('validated_at', { ascending: false })
+    .limit(limit);
+  if (error) throw error;
+  return Promise.all((data ?? []).map(mapValidationLogbookRow));
+}
+
+export async function validateFuelEvent(id) {
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  const { error } = await supabase
+    .from('fuel_events')
+    .update({ validated_at: new Date().toISOString(), validated_by: user.id })
+    .eq('id', id);
+  if (error) throw error;
+}
+
+export async function validateLogbookEntry(id) {
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  const { error } = await supabase
+    .from('logbook_entries')
+    .update({ validated_at: new Date().toISOString(), validated_by: user.id })
+    .eq('id', id);
+  if (error) throw error;
+}
+
+/** Supprime les photos d'un plein déjà validé (Storage puis lignes DB), sans toucher au
+ *  plein lui-même — action séparée et volontaire, jamais automatique à la validation. */
+export async function deleteFuelEventPhotos(id) {
+  const { data: photoRows, error: photosError } = await supabase
+    .from('photos')
+    .select('storage_path')
+    .eq('fuel_event_id', id);
+  if (photosError) throw photosError;
+
+  const paths = (photoRows ?? []).map((row) => row.storage_path);
+  if (paths.length > 0) {
+    const { error: removeError } = await supabase.storage.from('fuel-photos').remove(paths);
+    if (removeError) throw removeError;
+  }
+
+  const { error } = await supabase.from('photos').delete().eq('fuel_event_id', id);
+  if (error) throw error;
+}
+
+/** Supprime la photo d'un relevé déjà validé (Storage puis champ DB), sans toucher au
+ *  relevé lui-même. */
+export async function deleteLogbookEntryPhoto(id) {
+  const { data: entry, error: fetchError } = await supabase
+    .from('logbook_entries')
+    .select('photo_storage_path')
+    .eq('id', id)
+    .single();
+  if (fetchError) throw fetchError;
+
+  if (entry?.photo_storage_path) {
+    const { error: removeError } = await supabase.storage.from('logbook-photos').remove([entry.photo_storage_path]);
+    if (removeError) throw removeError;
+  }
+
+  const { error } = await supabase.from('logbook_entries').update({ photo_storage_path: null }).eq('id', id);
+  if (error) throw error;
+}
+
+/** Nombre total d'entrées (pleins + relevés) en attente de validation, tous chauffeurs
+ *  confondus — affiché en badge sur le lien "Validation" de l'accueil admin. */
+export async function countUnvalidatedEntries() {
+  const [fuelRes, logbookRes] = await Promise.all([
+    supabase.from('fuel_events').select('id', { count: 'exact', head: true }).is('validated_at', null),
+    supabase.from('logbook_entries').select('id', { count: 'exact', head: true }).is('validated_at', null),
+  ]);
+  if (fuelRes.error) throw fuelRes.error;
+  if (logbookRes.error) throw logbookRes.error;
+  return (fuelRes.count ?? 0) + (logbookRes.count ?? 0);
 }

@@ -5,6 +5,9 @@ import {
   PHOTO_TYPES,
   listVehicles,
   listDrivers,
+  createVehicle,
+  createDriver,
+  getMyProfile,
   getLastFuelEvent,
   listFuelEvents,
   createFuelEvent,
@@ -18,6 +21,15 @@ import {
   getLogbookEntry,
   uploadLogbookEntryPhoto,
   deleteLogbookEntry,
+  listUnvalidatedFuelEvents,
+  listUnvalidatedLogbookEntries,
+  listRecentlyValidatedFuelEvents,
+  listRecentlyValidatedLogbookEntries,
+  validateFuelEvent,
+  validateLogbookEntry,
+  deleteFuelEventPhotos,
+  deleteLogbookEntryPhoto,
+  countUnvalidatedEntries,
 } from './api.js';
 
 const ACTIVE_VEHICLE_KEY = 'intellifleet:active_vehicle_id';
@@ -109,6 +121,15 @@ function parseHash() {
 // soit jamais bloquée par ce garde-fou.
 let lastRenderedKey;
 
+// Profil (role admin/driver) de l'utilisateur connecté — voir 0005_fleet_multi_user.sql.
+// undefined = pas encore chargé pour la session en cours ; null = chargé, aucune ligne
+// profiles trouvée (compte non configuré) ; objet = profil chargé. Chargé une seule
+// fois par connexion (pas à chaque hashchange) et réinitialisé à la déconnexion, voir
+// onAuthStateChange plus bas.
+let currentProfile;
+
+const ADMIN_ONLY_PAGES = ['vehicle-form', 'driver-form', 'validation'];
+
 async function route() {
   const {
     data: { session },
@@ -125,15 +146,31 @@ async function route() {
     return;
   }
 
+  if (session && currentProfile === undefined) {
+    currentProfile = await getMyProfile(session.user.id);
+  }
+
+  // Garde-fou d'affichage pour les écrans admin only : la vraie protection est la
+  // policy RLS (insert/update/delete refusés côté serveur pour un non-admin), ceci
+  // évite juste d'afficher l'écran à un compte driver qui taperait l'URL à la main.
+  if (session && currentProfile && ADMIN_ONLY_PAGES.includes(page) && currentProfile.role !== 'admin') {
+    location.hash = '#/';
+    return;
+  }
+
   const key = `${session ? 'in' : 'out'}:${location.hash}`;
   if (key === lastRenderedKey) return; // même écran déjà affiché, rien à refaire
   lastRenderedKey = key;
 
   try {
+    if (session && currentProfile === null) return renderNoProfile();
     if (page === 'login') return renderLogin();
     if (page === 'history') return await renderHistory();
     if (page === 'fuel-event') return await renderFuelEventForm(segments[1] ?? null, query.get('vehicleId'));
     if (page === 'logbook-entry') return await renderLogbookEntryForm(segments[1] ?? null, query.get('vehicleId'));
+    if (page === 'vehicle-form') return await renderVehicleForm();
+    if (page === 'driver-form') return await renderDriverForm();
+    if (page === 'validation') return await renderValidation();
     return await renderHome();
   } catch (e) {
     setError(e);
@@ -150,6 +187,7 @@ window.addEventListener('hashchange', route);
 // jeton, aucun effet sur le routing) pour éviter du travail inutile.
 supabase.auth.onAuthStateChange((event) => {
   if (event === 'INITIAL_SESSION' || event === 'TOKEN_REFRESHED') return;
+  if (event === 'SIGNED_OUT') currentProfile = undefined;
   route();
 });
 
@@ -195,11 +233,29 @@ function renderLogin() {
   });
 }
 
+// ---------- Écran : compte non configuré ----------
+
+// Un utilisateur peut avoir une session Supabase Auth valide sans ligne profiles
+// (ex. compte créé mais pas encore assigné par l'admin) — depuis 0005, presque tout
+// est bloqué par RLS pour ce cas (is_fleet_member() est faux), donc mieux vaut le
+// dire clairement plutôt que d'afficher des écrans vides sans explication.
+function renderNoProfile() {
+  setContent(`
+    <div style="margin-top:15vh;text-align:center">
+      <h1>IntelliFleet</h1>
+      <p class="error">Ce compte n'est pas encore configuré (aucun profil). Contacte l'administrateur.</p>
+      <button class="btn btn-destructive" id="btn-logout" style="margin-top:16px">Se déconnecter</button>
+    </div>
+  `);
+  document.getElementById('btn-logout').addEventListener('click', () => supabase.auth.signOut());
+}
+
 // ---------- Écran : accueil ----------
 
 async function renderHome() {
   setLoading();
-  const vehicles = await listVehicles();
+  const isAdmin = currentProfile?.role === 'admin';
+  const [vehicles, pendingCount] = await Promise.all([listVehicles(), isAdmin ? countUnvalidatedEntries() : Promise.resolve(0)]);
   const activeVehicleId = getActiveVehicleId(vehicles);
   const activeVehicle = vehicles.find((v) => v.id === activeVehicleId) ?? null;
   const lastEvent = activeVehicleId ? await getLastFuelEvent(activeVehicleId) : null;
@@ -216,6 +272,18 @@ async function renderHome() {
     <div class="link-row">
       <a href="#/history">Historique →</a>
     </div>
+
+    ${
+      isAdmin
+        ? `
+    <div class="link-row">
+      <a href="#/vehicle-form">+ Véhicule</a>
+      <a href="#/driver-form">+ Chauffeur</a>
+      <a href="#/validation">Validation${pendingCount > 0 ? ` (${pendingCount})` : ''}</a>
+    </div>
+    `
+        : ''
+    }
 
     ${
       activeVehicle
@@ -277,6 +345,7 @@ function toTimeline(fuelEvents, logbookEntries) {
     amount: e.amount,
     station: e.station,
     isComplete: e.is_complete,
+    validatedAt: e.validated_at,
   }));
   const logbookItems = logbookEntries.map((e) => ({
     kind: 'logbook',
@@ -287,6 +356,7 @@ function toTimeline(fuelEvents, logbookEntries) {
     driverName: e.driver_name,
     comment: e.comment,
     hasPhoto: e.photo_storage_path !== null,
+    validatedAt: e.validated_at,
   }));
   return [...fuelItems, ...logbookItems].sort((a, b) => {
     if (a.date !== b.date) return a.date < b.date ? 1 : -1;
@@ -313,7 +383,10 @@ function renderTimelineRow(item) {
       <span class="timeline-content">
         <span class="timeline-header">
           <span class="timeline-title">${kindLabel}</span>
-          <span class="timeline-date">${item.date}</span>
+          <span style="display:flex;align-items:center;gap:8px">
+            <span class="badge ${item.validatedAt ? 'badge-validated' : 'badge-pending'}">${item.validatedAt ? 'Validé' : 'Non validé'}</span>
+            <span class="timeline-date">${item.date}</span>
+          </span>
         </span>
         <span class="timeline-line">${item.km.toLocaleString('fr-FR')} km</span>
         ${detailLines}
@@ -377,19 +450,25 @@ async function renderHistory() {
 // pour n'importe quelle autre raison (changement de véhicule, événement Supabase...)
 // redessine donc toujours le bon aperçu au lieu de risquer de le perdre.
 
-function photoSlotHtml(type, label, previewUrl, fullWidth) {
+function photoSlotHtml(type, label, previewUrl, fullWidth, locked = false) {
   const camId = `photo-${type}-cam`;
   const galId = `photo-${type}-gal`;
   return `
     <div class="photo-slot ${fullWidth ? 'full-width' : ''}" data-type="${type}">
       <span class="slot-label">${escapeHtml(label)}</span>
       ${previewUrl ? `<img src="${previewUrl}" alt="">` : '<div class="placeholder">Aucune photo</div>'}
+      ${
+        locked
+          ? ''
+          : `
       <div class="photo-actions">
         <label for="${camId}">${previewUrl ? 'Reprendre' : 'Prendre'}</label>
         <input type="file" accept="image/*" capture="environment" id="${camId}" data-type="${type}">
         <label for="${galId}">Galerie</label>
         <input type="file" accept="image/*" id="${galId}" data-type="${type}">
       </div>
+      `
+      }
     </div>
   `;
 }
@@ -434,6 +513,12 @@ async function renderFuelEventForm(editingId, presetVehicleId) {
     photoState[type] = { file: null, previewUrl: existing?.photos?.[type]?.signedUrl ?? null };
   }
 
+  // Verrou de validation (0005_fleet_multi_user.sql) : un compte non-admin ne peut
+  // plus rien modifier une fois l'entrée validée — la policy RLS le refuserait de
+  // toute façon, mais on l'affiche clairement plutôt que de laisser un formulaire
+  // trompeur (des champs qu'on peut remplir pour rien).
+  const locked = !!(existing?.validated_at) && currentProfile?.role !== 'admin';
+
   function currentVehicle() {
     return vehicles.find((v) => v.id === state.vehicleId) ?? null;
   }
@@ -442,9 +527,11 @@ async function renderFuelEventForm(editingId, presetVehicleId) {
     setContent(`
       <h1>${editingId ? 'Modifier le plein' : 'Nouveau plein'}</h1>
 
+      ${locked ? `<p class="warning">Validé le ${existing.validated_at.slice(0, 10)} — modification impossible.</p>` : ''}
+
       <div class="section-label">Photos (optionnelles à la saisie)</div>
       <div class="photo-grid" id="photo-grid">
-        ${PHOTO_TYPES.map(({ type, label }) => photoSlotHtml(type, label, photoState[type].previewUrl, false)).join('')}
+        ${PHOTO_TYPES.map(({ type, label }) => photoSlotHtml(type, label, photoState[type].previewUrl, false, locked)).join('')}
       </div>
 
       <div class="section-label">Véhicule</div>
@@ -452,29 +539,37 @@ async function renderFuelEventForm(editingId, presetVehicleId) {
 
       <div class="section-label">Chauffeur (optionnel)</div>
       <div class="chip-row" id="driver-chips">
-        <button class="chip ${state.driverId === null ? 'active' : ''}" data-id="">Aucun</button>
-        ${drivers.map((d) => `<button class="chip ${state.driverId === d.id ? 'active' : ''}" data-id="${d.id}">${escapeHtml(d.name)}</button>`).join('')}
+        <button class="chip ${state.driverId === null ? 'active' : ''}" data-id="" ${locked ? 'disabled' : ''}>Aucun</button>
+        ${drivers.map((d) => `<button class="chip ${state.driverId === d.id ? 'active' : ''}" data-id="${d.id}" ${locked ? 'disabled' : ''}>${escapeHtml(d.name)}</button>`).join('')}
       </div>
 
       <div class="section-label">Détails</div>
-      <div class="field"><label>Date (AAAA-MM-JJ)</label><input type="date" id="f-date" value="${state.eventDate}"></div>
-      <div class="field"><label>Km</label><input type="number" inputmode="numeric" id="f-km" value="${escapeHtml(state.km)}"></div>
+      <div class="field"><label>Date (AAAA-MM-JJ)</label><input type="date" id="f-date" value="${state.eventDate}" ${locked ? 'disabled' : ''}></div>
+      <div class="field"><label>Km</label><input type="number" inputmode="numeric" id="f-km" value="${escapeHtml(state.km)}" ${locked ? 'disabled' : ''}></div>
       <p class="warning" id="km-warning" hidden></p>
-      <div class="field"><label>Litres</label><input type="number" step="0.01" inputmode="decimal" id="f-liters" value="${escapeHtml(state.liters)}"></div>
-      <div class="field"><label>Prix unitaire (RWF/L)</label><input type="number" inputmode="numeric" id="f-unit-price" value="${escapeHtml(state.unitPrice)}"></div>
-      <div class="field"><label>Montant (RWF)</label><input type="number" inputmode="numeric" id="f-amount" value="${escapeHtml(state.amount)}"></div>
+      <div class="field"><label>Litres</label><input type="number" step="0.01" inputmode="decimal" id="f-liters" value="${escapeHtml(state.liters)}" ${locked ? 'disabled' : ''}></div>
+      <div class="field"><label>Prix unitaire (RWF/L)</label><input type="number" inputmode="numeric" id="f-unit-price" value="${escapeHtml(state.unitPrice)}" ${locked ? 'disabled' : ''}></div>
+      <div class="field"><label>Montant (RWF)</label><input type="number" inputmode="numeric" id="f-amount" value="${escapeHtml(state.amount)}" ${locked ? 'disabled' : ''}></div>
       <p class="warning" id="amount-warning" hidden></p>
-      <div class="field"><label>Station</label><input type="text" id="f-station" value="${escapeHtml(state.station)}"></div>
-      <div class="field"><label>Notes</label><textarea id="f-notes">${escapeHtml(state.notes)}</textarea></div>
+      <div class="field"><label>Station</label><input type="text" id="f-station" value="${escapeHtml(state.station)}" ${locked ? 'disabled' : ''}></div>
+      <div class="field"><label>Notes</label><textarea id="f-notes" ${locked ? 'disabled' : ''}>${escapeHtml(state.notes)}</textarea></div>
 
       <p class="error" id="form-error" hidden></p>
+      ${
+        locked
+          ? ''
+          : `
       <button class="btn btn-primary" id="btn-submit">${editingId ? 'Enregistrer les modifications' : 'Enregistrer'}</button>
       ${editingId ? '<button class="btn btn-destructive" id="btn-delete">Supprimer ce plein</button>' : ''}
+      `
+      }
       <a href="#/">← Annuler</a>
     `);
 
     renderKmWarning();
     renderAmountWarning();
+
+    if (locked) return; // aucun listener d'édition à attacher, tout est en lecture seule
 
     document.querySelectorAll('#vehicle-chips .chip').forEach((chip) => {
       chip.addEventListener('click', () => {
@@ -626,6 +721,10 @@ async function renderLogbookEntryForm(editingId, presetVehicleId) {
   const originalPhotoUrl = existing ? existing.photoSignedUrl : null;
   const photo = { file: null, previewUrl: originalPhotoUrl };
 
+  // Verrou de validation (0005_fleet_multi_user.sql), même principe que le formulaire
+  // de plein.
+  const locked = !!(existing?.validated_at) && currentProfile?.role !== 'admin';
+
   function currentVehicle() {
     return vehicles.find((v) => v.id === state.vehicleId) ?? null;
   }
@@ -634,9 +733,11 @@ async function renderLogbookEntryForm(editingId, presetVehicleId) {
     setContent(`
       <h1>${editingId ? 'Modifier le relevé' : 'Nouveau relevé'}</h1>
 
+      ${locked ? `<p class="warning">Validé le ${existing.validated_at.slice(0, 10)} — modification impossible.</p>` : ''}
+
       <div class="section-label">Photo (optionnelle)</div>
       <div class="photo-grid" id="photo-grid">
-        ${photoSlotHtml('odometer', 'Compteur', photo.previewUrl, true)}
+        ${photoSlotHtml('odometer', 'Compteur', photo.previewUrl, true, locked)}
       </div>
 
       <div class="section-label">Véhicule</div>
@@ -644,23 +745,31 @@ async function renderLogbookEntryForm(editingId, presetVehicleId) {
 
       <div class="section-label">Chauffeur (optionnel)</div>
       <div class="chip-row" id="driver-chips">
-        <button class="chip ${state.driverId === null ? 'active' : ''}" data-id="">Aucun</button>
-        ${drivers.map((d) => `<button class="chip ${state.driverId === d.id ? 'active' : ''}" data-id="${d.id}">${escapeHtml(d.name)}</button>`).join('')}
+        <button class="chip ${state.driverId === null ? 'active' : ''}" data-id="" ${locked ? 'disabled' : ''}>Aucun</button>
+        ${drivers.map((d) => `<button class="chip ${state.driverId === d.id ? 'active' : ''}" data-id="${d.id}" ${locked ? 'disabled' : ''}>${escapeHtml(d.name)}</button>`).join('')}
       </div>
 
       <div class="section-label">Détails</div>
-      <div class="field"><label>Date (AAAA-MM-JJ)</label><input type="date" id="f-date" value="${state.eventDate}"></div>
-      <div class="field"><label>Km</label><input type="number" inputmode="numeric" id="f-km" value="${escapeHtml(state.km)}"></div>
+      <div class="field"><label>Date (AAAA-MM-JJ)</label><input type="date" id="f-date" value="${state.eventDate}" ${locked ? 'disabled' : ''}></div>
+      <div class="field"><label>Km</label><input type="number" inputmode="numeric" id="f-km" value="${escapeHtml(state.km)}" ${locked ? 'disabled' : ''}></div>
       <p class="warning" id="km-warning" hidden></p>
-      <div class="field"><label>Commentaire (optionnel)</label><textarea id="f-comment">${escapeHtml(state.comment)}</textarea></div>
+      <div class="field"><label>Commentaire (optionnel)</label><textarea id="f-comment" ${locked ? 'disabled' : ''}>${escapeHtml(state.comment)}</textarea></div>
 
       <p class="error" id="form-error" hidden></p>
+      ${
+        locked
+          ? ''
+          : `
       <button class="btn btn-primary" id="btn-submit">${editingId ? 'Enregistrer les modifications' : 'Enregistrer'}</button>
       ${editingId ? '<button class="btn btn-destructive" id="btn-delete">Supprimer ce relevé</button>' : ''}
+      `
+      }
       <a href="#/">← Annuler</a>
     `);
 
     renderKmWarning();
+
+    if (locked) return;
 
     document.querySelectorAll('#vehicle-chips .chip').forEach((chip) => {
       chip.addEventListener('click', () => {
@@ -761,6 +870,184 @@ async function renderLogbookEntryForm(editingId, presetVehicleId) {
   }
 
   renderForm();
+}
+
+// ---------- Écran : nouveau véhicule (admin only) ----------
+
+async function renderVehicleForm() {
+  setContent(`
+    <h1>Nouveau véhicule</h1>
+    <div class="field"><label>Nom</label><input type="text" id="f-name"></div>
+    <div class="field"><label>Plaque</label><input type="text" id="f-plate"></div>
+    <div class="field"><label>Marque</label><input type="text" id="f-make"></div>
+    <div class="field"><label>Modèle</label><input type="text" id="f-model"></div>
+    <div class="field"><label>Année (optionnel)</label><input type="number" inputmode="numeric" id="f-year"></div>
+    <div class="field"><label>Km initial</label><input type="number" inputmode="numeric" id="f-initial-km" value="0"></div>
+    <div class="field"><label>Capacité réservoir en litres (optionnel)</label><input type="number" step="0.1" inputmode="decimal" id="f-tank"></div>
+    <p class="error" id="form-error" hidden></p>
+    <button class="btn btn-primary" id="btn-submit">Créer le véhicule</button>
+    <a href="#/">← Annuler</a>
+  `);
+
+  const errorEl = document.getElementById('form-error');
+  const submitBtn = document.getElementById('btn-submit');
+
+  submitBtn.addEventListener('click', async () => {
+    errorEl.hidden = true;
+    const name = document.getElementById('f-name').value.trim();
+    const plate = document.getElementById('f-plate').value.trim();
+    const make = document.getElementById('f-make').value.trim();
+    const model = document.getElementById('f-model').value.trim();
+    const yearRaw = document.getElementById('f-year').value;
+    const initialKmRaw = document.getElementById('f-initial-km').value;
+    const tankRaw = document.getElementById('f-tank').value;
+    if (!name || !plate || !make || !model) {
+      errorEl.textContent = 'Nom, plaque, marque et modèle sont obligatoires.';
+      errorEl.hidden = false;
+      return;
+    }
+
+    submitBtn.disabled = true;
+    submitBtn.textContent = 'Création…';
+    try {
+      await createVehicle({
+        name,
+        plate,
+        make,
+        model,
+        year: yearRaw ? parseInt(yearRaw, 10) : null,
+        initialKm: initialKmRaw ? parseInt(initialKmRaw, 10) : 0,
+        tankCapacityLiters: tankRaw ? parseFloat(tankRaw) : null,
+      });
+      location.hash = '#/';
+    } catch (e) {
+      errorEl.textContent = e.message || String(e);
+      errorEl.hidden = false;
+      submitBtn.disabled = false;
+      submitBtn.textContent = 'Créer le véhicule';
+    }
+  });
+}
+
+// ---------- Écran : nouveau chauffeur (admin only) ----------
+
+async function renderDriverForm() {
+  setContent(`
+    <h1>Nouveau chauffeur</h1>
+    <div class="field"><label>Nom</label><input type="text" id="f-name"></div>
+    <p class="error" id="form-error" hidden></p>
+    <button class="btn btn-primary" id="btn-submit">Créer le chauffeur</button>
+    <a href="#/">← Annuler</a>
+  `);
+
+  const errorEl = document.getElementById('form-error');
+  const submitBtn = document.getElementById('btn-submit');
+
+  submitBtn.addEventListener('click', async () => {
+    errorEl.hidden = true;
+    const name = document.getElementById('f-name').value.trim();
+    if (!name) {
+      errorEl.textContent = 'Le nom est obligatoire.';
+      errorEl.hidden = false;
+      return;
+    }
+
+    submitBtn.disabled = true;
+    submitBtn.textContent = 'Création…';
+    try {
+      await createDriver({ name });
+      location.hash = '#/';
+    } catch (e) {
+      errorEl.textContent = e.message || String(e);
+      errorEl.hidden = false;
+      submitBtn.disabled = false;
+      submitBtn.textContent = 'Créer le chauffeur';
+    }
+  });
+}
+
+// ---------- Écran : validation (admin only) ----------
+
+function validationRowHtml(item) {
+  const kindLabel = item.kind === 'fuel' ? 'Plein' : 'Relevé';
+  const isValidated = !!item.validatedAt;
+  const thumbs = item.photos.map((p) => `<img class="validation-thumb" src="${p.signedUrl}" alt="${escapeHtml(p.type)}">`).join('');
+  return `
+    <div class="card">
+      <div class="timeline-header">
+        <p class="card-title">${kindLabel} · ${escapeHtml(item.vehicleName)}</p>
+        <span class="badge ${isValidated ? 'badge-validated' : 'badge-pending'}">${isValidated ? 'Validé' : 'Non validé'}</span>
+      </div>
+      <p class="card-subtitle">${item.date} · ${item.km.toLocaleString('fr-FR')} km${item.driverName ? ` · ${escapeHtml(item.driverName)}` : ''}</p>
+      ${item.kind === 'fuel' ? `<p class="timeline-line">${item.liters} L · ${item.amount.toLocaleString('fr-FR')} RWF</p>` : ''}
+      ${thumbs ? `<div class="validation-thumbs">${thumbs}</div>` : '<p class="empty-text">Aucune photo.</p>'}
+      <div class="btn-row">
+        ${!isValidated ? `<button class="btn btn-primary" data-action="validate" data-kind="${item.kind}" data-id="${item.id}">Valider</button>` : ''}
+        ${isValidated && item.photos.length > 0 ? `<button class="btn btn-destructive" data-action="delete-photos" data-kind="${item.kind}" data-id="${item.id}">Supprimer les photos</button>` : ''}
+      </div>
+    </div>
+  `;
+}
+
+async function renderValidation() {
+  setLoading();
+  const [pendingFuel, pendingLogbook, doneFuel, doneLogbook] = await Promise.all([
+    listUnvalidatedFuelEvents(),
+    listUnvalidatedLogbookEntries(),
+    listRecentlyValidatedFuelEvents(),
+    listRecentlyValidatedLogbookEntries(),
+  ]);
+  const byDateDesc = (a, b) => (a.date !== b.date ? (a.date < b.date ? 1 : -1) : a.createdAt < b.createdAt ? 1 : -1);
+  const pending = [...pendingFuel, ...pendingLogbook].sort(byDateDesc);
+  const done = [...doneFuel, ...doneLogbook].sort(byDateDesc);
+
+  setContent(`
+    <h1>Validation</h1>
+    <p class="error" id="validation-error" hidden></p>
+
+    <div class="section-label">À valider (${pending.length})</div>
+    ${pending.length === 0 ? '<p class="empty-text">Rien à valider.</p>' : pending.map(validationRowHtml).join('')}
+
+    <div class="section-label">Validées récemment</div>
+    ${done.length === 0 ? '<p class="empty-text">Aucune entrée validée récemment.</p>' : done.map(validationRowHtml).join('')}
+
+    <a href="#/">← Accueil</a>
+  `);
+
+  const errorEl = document.getElementById('validation-error');
+
+  document.querySelectorAll('[data-action="validate"]').forEach((btn) => {
+    btn.addEventListener('click', async () => {
+      errorEl.hidden = true;
+      btn.disabled = true;
+      try {
+        if (btn.dataset.kind === 'fuel') await validateFuelEvent(btn.dataset.id);
+        else await validateLogbookEntry(btn.dataset.id);
+        await renderValidation();
+      } catch (e) {
+        errorEl.textContent = e.message || String(e);
+        errorEl.hidden = false;
+        btn.disabled = false;
+      }
+    });
+  });
+
+  document.querySelectorAll('[data-action="delete-photos"]').forEach((btn) => {
+    btn.addEventListener('click', async () => {
+      if (!confirm('Supprimer les photos de cette entrée ? Cette action est irréversible.')) return;
+      errorEl.hidden = true;
+      btn.disabled = true;
+      try {
+        if (btn.dataset.kind === 'fuel') await deleteFuelEventPhotos(btn.dataset.id);
+        else await deleteLogbookEntryPhoto(btn.dataset.id);
+        await renderValidation();
+      } catch (e) {
+        errorEl.textContent = e.message || String(e);
+        errorEl.hidden = false;
+        btn.disabled = false;
+      }
+    });
+  });
 }
 
 // ---------- Service worker : désactivé pendant la phase de debugging actif ----------
