@@ -30,7 +30,10 @@ import {
   deleteFuelEventPhotos,
   deleteLogbookEntryPhoto,
   countUnvalidatedEntries,
+  listValidatedFuelEventsAll,
+  listValidatedLogbookEntriesAll,
 } from './api.js';
+import { buildScopeDashboard, groupVehiclesByFleetGroup, formatMonthLabel } from './dashboard.js';
 
 const ACTIVE_VEHICLE_KEY = 'intellifleet:active_vehicle_id';
 const AMOUNT_TOLERANCE_RATIO = 0.005; // 0.5 %
@@ -128,7 +131,7 @@ let lastRenderedKey;
 // onAuthStateChange plus bas.
 let currentProfile;
 
-const ADMIN_ONLY_PAGES = ['vehicle-form', 'driver-form', 'validation'];
+const ADMIN_ONLY_PAGES = ['vehicle-form', 'driver-form', 'validation', 'dashboard'];
 
 async function route() {
   const {
@@ -171,6 +174,7 @@ async function route() {
     if (page === 'vehicle-form') return await renderVehicleForm();
     if (page === 'driver-form') return await renderDriverForm();
     if (page === 'validation') return await renderValidation();
+    if (page === 'dashboard') return await renderDashboard();
     return await renderHome();
   } catch (e) {
     setError(e);
@@ -280,6 +284,7 @@ async function renderHome() {
       <a href="#/vehicle-form">+ Véhicule</a>
       <a href="#/driver-form">+ Chauffeur</a>
       <a href="#/validation">Validation${pendingCount > 0 ? ` (${pendingCount})` : ''}</a>
+      <a href="#/dashboard">Tableau de bord</a>
     </div>
     `
         : ''
@@ -884,6 +889,7 @@ async function renderVehicleForm() {
     <div class="field"><label>Année (optionnel)</label><input type="number" inputmode="numeric" id="f-year"></div>
     <div class="field"><label>Km initial</label><input type="number" inputmode="numeric" id="f-initial-km" value="0"></div>
     <div class="field"><label>Capacité réservoir en litres (optionnel)</label><input type="number" step="0.1" inputmode="decimal" id="f-tank"></div>
+    <div class="field"><label>Groupe de flotte (optionnel)</label><input type="text" id="f-fleet-group" placeholder="ex. Privés, SHER Rwanda, SHER Burundi"></div>
     <p class="error" id="form-error" hidden></p>
     <button class="btn btn-primary" id="btn-submit">Créer le véhicule</button>
     <a href="#/">← Annuler</a>
@@ -901,6 +907,7 @@ async function renderVehicleForm() {
     const yearRaw = document.getElementById('f-year').value;
     const initialKmRaw = document.getElementById('f-initial-km').value;
     const tankRaw = document.getElementById('f-tank').value;
+    const fleetGroupRaw = document.getElementById('f-fleet-group').value.trim();
     if (!name || !plate || !make || !model) {
       errorEl.textContent = 'Nom, plaque, marque et modèle sont obligatoires.';
       errorEl.hidden = false;
@@ -918,6 +925,7 @@ async function renderVehicleForm() {
         year: yearRaw ? parseInt(yearRaw, 10) : null,
         initialKm: initialKmRaw ? parseInt(initialKmRaw, 10) : 0,
         tankCapacityLiters: tankRaw ? parseFloat(tankRaw) : null,
+        fleetGroup: fleetGroupRaw || null,
       });
       location.hash = '#/';
     } catch (e) {
@@ -1048,6 +1056,210 @@ async function renderValidation() {
       }
     });
   });
+}
+
+// ---------- Écran : tableau de bord (admin only) ----------
+
+const DASHBOARD_VIEWS = [
+  { key: 'vehicle', label: 'Par véhicule' },
+  { key: 'group', label: 'Par groupe' },
+  { key: 'total', label: 'Total flotte' },
+];
+
+// État local de l'écran (vue + sélection + métrique du graphique). Pas de persistance
+// (localStorage) volontaire : contrairement au véhicule actif de l'accueil, ce choix
+// n'a pas besoin de survivre à une navigation ailleurs puis un retour.
+let dashboardState = null;
+
+function dashboardChartSvg(monthlyAsc, metric) {
+  const width = 320;
+  const height = 130;
+  const padding = 22;
+  const points = monthlyAsc
+    .map((r) => ({ month: r.month, value: metric === 'cost' ? r.amount : r.litersPer100km }))
+    .filter((p) => p.value != null);
+
+  if (points.length === 0) {
+    return '<p class="empty-text">Pas assez de données pour le graphique.</p>';
+  }
+
+  const values = points.map((p) => p.value);
+  const min = Math.min(...values);
+  const max = Math.max(...values);
+  const range = max - min || 1;
+  const stepX = points.length > 1 ? (width - 2 * padding) / (points.length - 1) : 0;
+  const coords = points.map((p, i) => ({
+    x: padding + i * stepX,
+    y: height - padding - ((p.value - min) / range) * (height - 2 * padding),
+    month: p.month,
+  }));
+
+  const polyline = coords.map((c) => `${c.x.toFixed(1)},${c.y.toFixed(1)}`).join(' ');
+  const dots = coords
+    .map((c) => `<circle cx="${c.x.toFixed(1)}" cy="${c.y.toFixed(1)}" r="3" fill="var(--blue)"></circle>`)
+    .join('');
+  const first = coords[0];
+  const last = coords[coords.length - 1];
+
+  return `
+    <svg viewBox="0 0 ${width} ${height}" class="chart-svg" role="img" aria-label="Évolution mensuelle">
+      <polyline points="${polyline}" fill="none" stroke="var(--blue)" stroke-width="2"></polyline>
+      ${dots}
+      <text x="${first.x.toFixed(1)}" y="${height - 6}" font-size="9" fill="var(--text-muted)">${escapeHtml(formatMonthLabel(first.month))}</text>
+      <text x="${last.x.toFixed(1)}" y="${height - 6}" text-anchor="end" font-size="9" fill="var(--text-muted)">${escapeHtml(formatMonthLabel(last.month))}</text>
+    </svg>
+  `;
+}
+
+function dashboardMonthlyTableHtml(monthly) {
+  if (monthly.length === 0) return '<p class="empty-text">Aucune donnée validée pour cette sélection.</p>';
+  const rows = monthly
+    .map(
+      (r) => `
+    <tr>
+      <td>${escapeHtml(formatMonthLabel(r.month))}</td>
+      <td>${r.km.toLocaleString('fr-FR')}</td>
+      <td>${r.liters.toLocaleString('fr-FR', { maximumFractionDigits: 1 })}</td>
+      <td>${Math.round(r.amount).toLocaleString('fr-FR')}</td>
+      <td>${r.costPerKm != null ? Math.round(r.costPerKm).toLocaleString('fr-FR') : '—'}</td>
+      <td>${r.litersPer100km != null ? r.litersPer100km.toFixed(1) : '—'}</td>
+    </tr>
+  `
+    )
+    .join('');
+  return `
+    <div style="overflow-x:auto">
+      <table class="data-table">
+        <thead><tr><th>Mois</th><th>Km</th><th>Litres</th><th>Coût</th><th>Coût/km</th><th>L/100km</th></tr></thead>
+        <tbody>${rows}</tbody>
+      </table>
+    </div>
+  `;
+}
+
+function dashboardDriverTableHtml(drivers) {
+  if (drivers.length === 0) return '<p class="empty-text">Aucun segment pour cette sélection.</p>';
+  const rows = drivers
+    .map(
+      (d) => `
+    <tr>
+      <td>${escapeHtml(d.driverName ?? 'Non attribué')}</td>
+      <td>${d.km.toLocaleString('fr-FR')}</td>
+      <td>${d.segmentCount}</td>
+    </tr>
+  `
+    )
+    .join('');
+  return `
+    <table class="data-table">
+      <thead><tr><th>Chauffeur</th><th>Km attribué</th><th>Saisies</th></tr></thead>
+      <tbody>${rows}</tbody>
+    </table>
+  `;
+}
+
+async function renderDashboard() {
+  setLoading();
+  const [vehicles, fuelEvents, logbookEntries] = await Promise.all([
+    listVehicles(),
+    listValidatedFuelEventsAll(),
+    listValidatedLogbookEntriesAll(),
+  ]);
+  const groups = groupVehiclesByFleetGroup(vehicles);
+
+  if (!dashboardState) {
+    dashboardState = {
+      view: 'vehicle',
+      vehicleId: vehicles[0]?.id ?? null,
+      group: groups[0]?.group ?? null,
+      metric: 'cost',
+    };
+  }
+
+  function vehicleIdsForScope() {
+    if (dashboardState.view === 'vehicle') return dashboardState.vehicleId ? [dashboardState.vehicleId] : [];
+    if (dashboardState.view === 'group') {
+      const match = groups.find((g) => g.group === dashboardState.group);
+      return match ? match.vehicleIds : [];
+    }
+    return vehicles.map((v) => v.id);
+  }
+
+  function draw() {
+    const { monthly, drivers } = buildScopeDashboard(vehicleIdsForScope(), fuelEvents, logbookEntries);
+    const monthlyAsc = [...monthly].reverse();
+
+    setContent(`
+      <h1>Tableau de bord</h1>
+
+      <div class="chip-row">
+        ${DASHBOARD_VIEWS.map(
+          (v) => `<button class="chip ${dashboardState.view === v.key ? 'active' : ''}" data-view="${v.key}">${v.label}</button>`
+        ).join('')}
+      </div>
+
+      ${
+        dashboardState.view === 'vehicle'
+          ? `<div class="chip-row">${vehicles
+              .map((v) => `<button class="chip ${dashboardState.vehicleId === v.id ? 'active' : ''}" data-vehicle="${v.id}">${escapeHtml(v.name)}</button>`)
+              .join('')}</div>`
+          : ''
+      }
+      ${
+        dashboardState.view === 'group'
+          ? `<div class="chip-row">${groups
+              .map(
+                (g) =>
+                  `<button class="chip ${dashboardState.group === g.group ? 'active' : ''}" data-group="${escapeHtml(g.group ?? '')}">${escapeHtml(g.group ?? 'Sans groupe')}</button>`
+              )
+              .join('')}</div>`
+          : ''
+      }
+      ${vehicles.length === 0 ? '<p class="empty-text">Aucun véhicule.</p>' : ''}
+
+      <div class="section-label">Évolution mensuelle</div>
+      <div class="chip-row">
+        <button class="chip ${dashboardState.metric === 'cost' ? 'active' : ''}" data-metric="cost">Coût</button>
+        <button class="chip ${dashboardState.metric === 'consumption' ? 'active' : ''}" data-metric="consumption">Consommation</button>
+      </div>
+      ${dashboardChartSvg(monthlyAsc, dashboardState.metric)}
+
+      <div class="section-label">Détail mensuel</div>
+      ${dashboardMonthlyTableHtml(monthly)}
+
+      <div class="section-label">Par chauffeur</div>
+      ${dashboardDriverTableHtml(drivers)}
+
+      <a href="#/">← Accueil</a>
+    `);
+
+    document.querySelectorAll('[data-view]').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        dashboardState.view = btn.dataset.view;
+        draw();
+      });
+    });
+    document.querySelectorAll('[data-vehicle]').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        dashboardState.vehicleId = btn.dataset.vehicle;
+        draw();
+      });
+    });
+    document.querySelectorAll('[data-group]').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        dashboardState.group = btn.dataset.group || null;
+        draw();
+      });
+    });
+    document.querySelectorAll('[data-metric]').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        dashboardState.metric = btn.dataset.metric;
+        draw();
+      });
+    });
+  }
+
+  draw();
 }
 
 // ---------- Service worker : désactivé pendant la phase de debugging actif ----------

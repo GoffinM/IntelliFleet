@@ -36,6 +36,7 @@ export async function createVehicle(input) {
       year: input.year,
       initial_km: input.initialKm,
       tank_capacity_liters: input.tankCapacityLiters,
+      fleet_group: input.fleetGroup,
     })
     .select()
     .single();
@@ -444,6 +445,38 @@ export async function deleteLogbookEntryPhoto(id) {
 
   const { error } = await supabase.from('logbook_entries').update({ photo_storage_path: null }).eq('id', id);
   if (error) throw error;
+}
+
+// ---------- Tableau de bord (0006_fleet_group.sql) ----------
+// Lecture seule, restreinte aux entrées validées — jamais les entrées en attente.
+
+function mapDashboardRow(row) {
+  const { drivers, ...rest } = row;
+  return { ...rest, driver_name: drivers?.name ?? null };
+}
+
+/** Tous les fuel_events validés, toutes flottes — source du tableau de bord. */
+export async function listValidatedFuelEventsAll() {
+  const { data, error } = await supabase
+    .from('fuel_events')
+    .select('id, vehicle_id, driver_id, event_date, km, liters, amount, created_at, drivers(name)')
+    .not('validated_at', 'is', null)
+    .order('event_date', { ascending: true })
+    .order('created_at', { ascending: true });
+  if (error) throw error;
+  return (data ?? []).map(mapDashboardRow);
+}
+
+/** Tous les logbook_entries validés, toutes flottes — source du tableau de bord. */
+export async function listValidatedLogbookEntriesAll() {
+  const { data, error } = await supabase
+    .from('logbook_entries')
+    .select('id, vehicle_id, driver_id, event_date, km, created_at, drivers(name)')
+    .not('validated_at', 'is', null)
+    .order('event_date', { ascending: true })
+    .order('created_at', { ascending: true });
+  if (error) throw error;
+  return (data ?? []).map(mapDashboardRow);
 }
 
 /** Nombre total d'entrées (pleins + relevés) en attente de validation, tous chauffeurs

@@ -392,3 +392,29 @@ h1 {
   object-fit: cover;
   border-radius: 6px;
 }
+
+.data-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+
+.data-table th,
+.data-table td {
+  text-align: right;
+  padding: 6px 4px;
+  border-bottom: 1px solid var(--divider);
+  white-space: nowrap;
+}
+
+.data-table th:first-child,
+.data-table td:first-child {
+  text-align: left;
+}
+
+.chart-svg {
+  width: 100%;
+  height: auto;
+  background: var(--card-bg);
+  border-radius: 12px;
+}
