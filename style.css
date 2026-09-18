@@ -418,3 +418,103 @@ h1 {
   background: var(--card-bg);
   border-radius: 12px;
 }
+
+/* ============================================================
+   Mise en page desktop (>= 900px). Tout le reste du fichier ci-dessus est la
+   mise en page mobile d'origine, non modifiée.
+
+   Les conteneurs ci-dessous (screen-*, card-grid, dashboard-*, home-*) sont en
+   display:contents par défaut : invisibles pour la mise en page, leurs enfants
+   restent des enfants directs du flex-column de #app — exactement comme avant
+   leur introduction dans le HTML. Seule la media query plus bas leur donne une
+   existence visuelle. .timeline-list est la seule exception : ce conteneur
+   existait déjà (div sans classe) avant cette tranche, avec un display:block
+   par défaut (donc sans gap entre lignes) — on préserve ce comportement tel
+   quel plutôt que de risquer d'introduire un espacement qui n'existait pas.
+   ============================================================ */
+
+.screen-narrow,
+.screen-wide,
+.screen-dashboard,
+.screen-home,
+.dashboard-layout,
+.home-layout,
+.dashboard-controls,
+.dashboard-tables,
+.home-nav,
+.home-status,
+.card-grid {
+  display: contents;
+}
+
+@media (min-width: 900px) {
+  /* La largeur de #app dépend de l'écran affiché (marqueur présent dans son
+     contenu), sans aucun changement JS. */
+  #app:has(.screen-narrow) {
+    max-width: 640px;
+  }
+  #app:has(.screen-wide) {
+    max-width: 1050px;
+  }
+  #app:has(.screen-dashboard) {
+    max-width: 1150px;
+  }
+  #app:has(.screen-home) {
+    max-width: 760px;
+  }
+
+  /* Formulaires : le marqueur devient lui-même la carte (pas de sous-conteneur
+     nécessaire, un formulaire n'a pas de disposition à plusieurs zones). */
+  .screen-narrow {
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+    background: var(--card-bg);
+    padding: 32px 40px;
+    border-radius: 16px;
+  }
+
+  .screen-narrow .photo-grid .photo-slot:not(.full-width) {
+    width: 22%;
+  }
+
+  /* Historique / Validation : grille de cartes responsive. screen-wide reste
+     display:contents (simple marqueur de largeur) : ses enfants directs (titre,
+     sélecteur, grille, lien retour) s'empilent normalement dans le flex-column
+     de #app, désormais plus large. */
+  .timeline-list,
+  .card-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+    gap: 16px;
+  }
+
+  /* Tableau de bord : deux zones (sélecteurs+graphique | tableaux). */
+  .dashboard-layout {
+    display: grid;
+    grid-template-columns: minmax(280px, 380px) 1fr;
+    gap: 24px;
+    align-items: start;
+  }
+  .dashboard-controls,
+  .dashboard-tables {
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+  }
+
+  /* Accueil : deux colonnes, ordre du DOM inchangé (sélecteur+liens | carte
+     véhicule+actions), voir proposition validée. */
+  .home-layout {
+    display: grid;
+    grid-template-columns: 1fr 1.4fr;
+    gap: 24px;
+    align-items: start;
+  }
+  .home-nav,
+  .home-status {
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+  }
+}

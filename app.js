@@ -265,60 +265,68 @@ async function renderHome() {
   const lastEvent = activeVehicleId ? await getLastFuelEvent(activeVehicleId) : null;
 
   setContent(`
+    <div class="screen-home">
     <h1>IntelliFleet</h1>
 
-    <div>
-      <div class="section-label">Véhicule actif</div>
-      <div class="chip-row" id="vehicle-chips">${vehicleChipsHtml(vehicles, activeVehicleId)}</div>
-      ${vehicles.length === 0 ? '<p class="empty-text">Aucun véhicule pour ce compte.</p>' : ''}
-    </div>
+    <div class="home-layout">
+      <div class="home-nav">
+        <div>
+          <div class="section-label">Véhicule actif</div>
+          <div class="chip-row" id="vehicle-chips">${vehicleChipsHtml(vehicles, activeVehicleId)}</div>
+          ${vehicles.length === 0 ? '<p class="empty-text">Aucun véhicule pour ce compte.</p>' : ''}
+        </div>
 
-    <div class="link-row">
-      <a href="#/history">Historique →</a>
-    </div>
+        <div class="link-row">
+          <a href="#/history">Historique →</a>
+        </div>
 
-    ${
-      isAdmin
-        ? `
-    <div class="link-row">
-      <a href="#/vehicle-form">+ Véhicule</a>
-      <a href="#/driver-form">+ Chauffeur</a>
-      <a href="#/validation">Validation${pendingCount > 0 ? ` (${pendingCount})` : ''}</a>
-      <a href="#/dashboard">Tableau de bord</a>
-    </div>
-    `
-        : ''
-    }
-
-    ${
-      activeVehicle
-        ? `
-      <div class="card">
-        <p class="card-title">${escapeHtml(activeVehicle.name)}</p>
-        <p class="card-subtitle">${escapeHtml(activeVehicle.plate)} · ${activeVehicle.current_km.toLocaleString('fr-FR')} km</p>
-        <div class="divider"></div>
-        <div class="section-label">Dernier plein</div>
         ${
-          lastEvent
+          isAdmin
             ? `
-          <p class="timeline-line">${lastEvent.event_date} — ${lastEvent.km.toLocaleString('fr-FR')} km</p>
-          <p class="timeline-line">${lastEvent.liters} L · ${lastEvent.amount.toLocaleString('fr-FR')} RWF</p>
-          ${lastEvent.station ? `<p class="timeline-line">${escapeHtml(lastEvent.station)}</p>` : ''}
-          ${lastEvent.driver_name ? `<p class="timeline-line">Chauffeur : ${escapeHtml(lastEvent.driver_name)}</p>` : ''}
-          ${!lastEvent.is_complete ? '<p class="incomplete-tag">Photos incomplètes</p>' : ''}
+        <div class="link-row">
+          <a href="#/vehicle-form">+ Véhicule</a>
+          <a href="#/driver-form">+ Chauffeur</a>
+          <a href="#/validation">Validation${pendingCount > 0 ? ` (${pendingCount})` : ''}</a>
+          <a href="#/dashboard">Tableau de bord</a>
+        </div>
         `
-            : '<p class="timeline-line">Aucun plein enregistré pour ce véhicule.</p>'
+            : ''
         }
       </div>
-    `
-        : ''
-    }
 
-    <div class="btn-row" style="margin-top:auto">
-      <button class="btn btn-primary" id="btn-new-fuel" ${!activeVehicleId ? 'disabled' : ''}>Nouveau plein</button>
-      <button class="btn btn-secondary" id="btn-new-logbook" ${!activeVehicleId ? 'disabled' : ''}>Nouveau relevé</button>
+      <div class="home-status">
+        ${
+          activeVehicle
+            ? `
+          <div class="card">
+            <p class="card-title">${escapeHtml(activeVehicle.name)}</p>
+            <p class="card-subtitle">${escapeHtml(activeVehicle.plate)} · ${activeVehicle.current_km.toLocaleString('fr-FR')} km</p>
+            <div class="divider"></div>
+            <div class="section-label">Dernier plein</div>
+            ${
+              lastEvent
+                ? `
+              <p class="timeline-line">${lastEvent.event_date} — ${lastEvent.km.toLocaleString('fr-FR')} km</p>
+              <p class="timeline-line">${lastEvent.liters} L · ${lastEvent.amount.toLocaleString('fr-FR')} RWF</p>
+              ${lastEvent.station ? `<p class="timeline-line">${escapeHtml(lastEvent.station)}</p>` : ''}
+              ${lastEvent.driver_name ? `<p class="timeline-line">Chauffeur : ${escapeHtml(lastEvent.driver_name)}</p>` : ''}
+              ${!lastEvent.is_complete ? '<p class="incomplete-tag">Photos incomplètes</p>' : ''}
+            `
+                : '<p class="timeline-line">Aucun plein enregistré pour ce véhicule.</p>'
+            }
+          </div>
+        `
+            : ''
+        }
+
+        <div class="btn-row" style="margin-top:auto">
+          <button class="btn btn-primary" id="btn-new-fuel" ${!activeVehicleId ? 'disabled' : ''}>Nouveau plein</button>
+          <button class="btn btn-secondary" id="btn-new-logbook" ${!activeVehicleId ? 'disabled' : ''}>Nouveau relevé</button>
+        </div>
+        <button class="btn btn-destructive" id="btn-logout">Se déconnecter</button>
+      </div>
     </div>
-    <button class="btn btn-destructive" id="btn-logout">Se déconnecter</button>
+    </div>
   `);
 
   document.querySelectorAll('#vehicle-chips .chip').forEach((chip) => {
@@ -416,11 +424,13 @@ async function renderHistory() {
   }
 
   setContent(`
+    <div class="screen-wide">
     <h1>Historique</h1>
     <div class="chip-row" id="vehicle-chips">${vehicleChipsHtml(vehicles, activeVehicleId)}</div>
     ${items.length === 0 ? '<p class="empty-text">Aucun événement enregistré pour ce véhicule.</p>' : ''}
-    <div>${items.map(renderTimelineRow).join('')}</div>
+    <div class="timeline-list">${items.map(renderTimelineRow).join('')}</div>
     <a href="#/">← Accueil</a>
+    </div>
   `);
 
   document.querySelectorAll('#vehicle-chips .chip').forEach((chip) => {
@@ -530,6 +540,7 @@ async function renderFuelEventForm(editingId, presetVehicleId) {
 
   function renderForm() {
     setContent(`
+      <div class="screen-narrow">
       <h1>${editingId ? 'Modifier le plein' : 'Nouveau plein'}</h1>
 
       ${locked ? `<p class="warning">Validé le ${existing.validated_at.slice(0, 10)} — modification impossible.</p>` : ''}
@@ -569,6 +580,7 @@ async function renderFuelEventForm(editingId, presetVehicleId) {
       `
       }
       <a href="#/">← Annuler</a>
+      </div>
     `);
 
     renderKmWarning();
@@ -736,6 +748,7 @@ async function renderLogbookEntryForm(editingId, presetVehicleId) {
 
   function renderForm() {
     setContent(`
+      <div class="screen-narrow">
       <h1>${editingId ? 'Modifier le relevé' : 'Nouveau relevé'}</h1>
 
       ${locked ? `<p class="warning">Validé le ${existing.validated_at.slice(0, 10)} — modification impossible.</p>` : ''}
@@ -770,6 +783,7 @@ async function renderLogbookEntryForm(editingId, presetVehicleId) {
       `
       }
       <a href="#/">← Annuler</a>
+      </div>
     `);
 
     renderKmWarning();
@@ -881,6 +895,7 @@ async function renderLogbookEntryForm(editingId, presetVehicleId) {
 
 async function renderVehicleForm() {
   setContent(`
+    <div class="screen-narrow">
     <h1>Nouveau véhicule</h1>
     <div class="field"><label>Nom</label><input type="text" id="f-name"></div>
     <div class="field"><label>Plaque</label><input type="text" id="f-plate"></div>
@@ -893,6 +908,7 @@ async function renderVehicleForm() {
     <p class="error" id="form-error" hidden></p>
     <button class="btn btn-primary" id="btn-submit">Créer le véhicule</button>
     <a href="#/">← Annuler</a>
+    </div>
   `);
 
   const errorEl = document.getElementById('form-error');
@@ -941,11 +957,13 @@ async function renderVehicleForm() {
 
 async function renderDriverForm() {
   setContent(`
+    <div class="screen-narrow">
     <h1>Nouveau chauffeur</h1>
     <div class="field"><label>Nom</label><input type="text" id="f-name"></div>
     <p class="error" id="form-error" hidden></p>
     <button class="btn btn-primary" id="btn-submit">Créer le chauffeur</button>
     <a href="#/">← Annuler</a>
+    </div>
   `);
 
   const errorEl = document.getElementById('form-error');
@@ -1010,16 +1028,18 @@ async function renderValidation() {
   const done = [...doneFuel, ...doneLogbook].sort(byDateDesc);
 
   setContent(`
+    <div class="screen-wide">
     <h1>Validation</h1>
     <p class="error" id="validation-error" hidden></p>
 
     <div class="section-label">À valider (${pending.length})</div>
-    ${pending.length === 0 ? '<p class="empty-text">Rien à valider.</p>' : pending.map(validationRowHtml).join('')}
+    ${pending.length === 0 ? '<p class="empty-text">Rien à valider.</p>' : `<div class="card-grid">${pending.map(validationRowHtml).join('')}</div>`}
 
     <div class="section-label">Validées récemment</div>
-    ${done.length === 0 ? '<p class="empty-text">Aucune entrée validée récemment.</p>' : done.map(validationRowHtml).join('')}
+    ${done.length === 0 ? '<p class="empty-text">Aucune entrée validée récemment.</p>' : `<div class="card-grid">${done.map(validationRowHtml).join('')}</div>`}
 
     <a href="#/">← Accueil</a>
+    </div>
   `);
 
   const errorEl = document.getElementById('validation-error');
@@ -1190,47 +1210,55 @@ async function renderDashboard() {
     const monthlyAsc = [...monthly].reverse();
 
     setContent(`
+      <div class="screen-dashboard">
       <h1>Tableau de bord</h1>
 
-      <div class="chip-row">
-        ${DASHBOARD_VIEWS.map(
-          (v) => `<button class="chip ${dashboardState.view === v.key ? 'active' : ''}" data-view="${v.key}">${v.label}</button>`
-        ).join('')}
+      <div class="dashboard-layout">
+        <div class="dashboard-controls">
+          <div class="chip-row">
+            ${DASHBOARD_VIEWS.map(
+              (v) => `<button class="chip ${dashboardState.view === v.key ? 'active' : ''}" data-view="${v.key}">${v.label}</button>`
+            ).join('')}
+          </div>
+
+          ${
+            dashboardState.view === 'vehicle'
+              ? `<div class="chip-row">${vehicles
+                  .map((v) => `<button class="chip ${dashboardState.vehicleId === v.id ? 'active' : ''}" data-vehicle="${v.id}">${escapeHtml(v.name)}</button>`)
+                  .join('')}</div>`
+              : ''
+          }
+          ${
+            dashboardState.view === 'group'
+              ? `<div class="chip-row">${groups
+                  .map(
+                    (g) =>
+                      `<button class="chip ${dashboardState.group === g.group ? 'active' : ''}" data-group="${escapeHtml(g.group ?? '')}">${escapeHtml(g.group ?? 'Sans groupe')}</button>`
+                  )
+                  .join('')}</div>`
+              : ''
+          }
+          ${vehicles.length === 0 ? '<p class="empty-text">Aucun véhicule.</p>' : ''}
+
+          <div class="section-label">Évolution mensuelle</div>
+          <div class="chip-row">
+            <button class="chip ${dashboardState.metric === 'cost' ? 'active' : ''}" data-metric="cost">Coût</button>
+            <button class="chip ${dashboardState.metric === 'consumption' ? 'active' : ''}" data-metric="consumption">Consommation</button>
+          </div>
+          ${dashboardChartSvg(monthlyAsc, dashboardState.metric)}
+        </div>
+
+        <div class="dashboard-tables">
+          <div class="section-label">Détail mensuel</div>
+          ${dashboardMonthlyTableHtml(monthly)}
+
+          <div class="section-label">Par chauffeur</div>
+          ${dashboardDriverTableHtml(drivers)}
+        </div>
       </div>
-
-      ${
-        dashboardState.view === 'vehicle'
-          ? `<div class="chip-row">${vehicles
-              .map((v) => `<button class="chip ${dashboardState.vehicleId === v.id ? 'active' : ''}" data-vehicle="${v.id}">${escapeHtml(v.name)}</button>`)
-              .join('')}</div>`
-          : ''
-      }
-      ${
-        dashboardState.view === 'group'
-          ? `<div class="chip-row">${groups
-              .map(
-                (g) =>
-                  `<button class="chip ${dashboardState.group === g.group ? 'active' : ''}" data-group="${escapeHtml(g.group ?? '')}">${escapeHtml(g.group ?? 'Sans groupe')}</button>`
-              )
-              .join('')}</div>`
-          : ''
-      }
-      ${vehicles.length === 0 ? '<p class="empty-text">Aucun véhicule.</p>' : ''}
-
-      <div class="section-label">Évolution mensuelle</div>
-      <div class="chip-row">
-        <button class="chip ${dashboardState.metric === 'cost' ? 'active' : ''}" data-metric="cost">Coût</button>
-        <button class="chip ${dashboardState.metric === 'consumption' ? 'active' : ''}" data-metric="consumption">Consommation</button>
-      </div>
-      ${dashboardChartSvg(monthlyAsc, dashboardState.metric)}
-
-      <div class="section-label">Détail mensuel</div>
-      ${dashboardMonthlyTableHtml(monthly)}
-
-      <div class="section-label">Par chauffeur</div>
-      ${dashboardDriverTableHtml(drivers)}
 
       <a href="#/">← Accueil</a>
+      </div>
     `);
 
     document.querySelectorAll('[data-view]').forEach((btn) => {
