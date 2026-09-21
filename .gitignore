@@ -41,6 +41,10 @@ liens.txt
 # typescript
 *.tsbuildinfo
 
+# cache local du Supabase CLI (supabase link / functions) — pas de secret dedans,
+# juste des métadonnées de session, mais ça n'a rien à faire dans le repo
+supabase/.temp/
+
 # generated native folders
 /ios
 /android
