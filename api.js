@@ -301,6 +301,62 @@ export async function deleteLogbookEntry(id) {
   if (error) throw error;
 }
 
+// ---------- Trajets ouverts (0008_open_trips_view.sql) ----------
+
+/** Tous MES trajets ouverts (close_km null), tous véhicules confondus. Filtre
+ *  owner_id explicite : pour un admin, la RLS seule renverrait tous les trajets
+ *  ouverts de la flotte (owner_id = moi OU admin), pas seulement les miens. */
+export async function listMyOpenLogbookTrips() {
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  if (!user) return [];
+  const { data, error } = await supabase
+    .from('logbook_entries')
+    .select('id, vehicle_id, event_date, km, vehicles(name), drivers(name)')
+    .eq('owner_id', user.id)
+    .is('close_km', null)
+    .order('event_date', { ascending: false });
+  if (error) throw error;
+  return (data ?? []).map((row) => ({
+    id: row.id,
+    vehicleId: row.vehicle_id,
+    vehicleName: row.vehicles?.name ?? '',
+    driverName: row.drivers?.name ?? null,
+    eventDate: row.event_date,
+    km: row.km,
+  }));
+}
+
+/** Nombre de trajets dans listMyOpenLogbookTrips() — affiché en badge sur le
+ *  bouton "Fermer un trajet" de l'accueil. */
+export async function countMyOpenLogbookTrips() {
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  if (!user) return 0;
+  const { count, error } = await supabase
+    .from('logbook_entries')
+    .select('id', { count: 'exact', head: true })
+    .eq('owner_id', user.id)
+    .is('close_km', null);
+  if (error) throw error;
+  return count ?? 0;
+}
+
+/** Trajets ouverts d'AUTRES chauffeurs sur un véhicule donné, via la vue
+ *  open_trips_other_drivers (0008) — id, vehicle_id, driver_name, event_date, km
+ *  uniquement, jamais de commentaire/photo/owner_id. */
+export async function listOpenTripsOnVehicleByOthers(vehicleId) {
+  const { data, error } = await supabase
+    .from('open_trips_other_drivers')
+    .select('*')
+    .eq('vehicle_id', vehicleId)
+    .order('event_date', { ascending: false });
+  if (error) throw error;
+  return data ?? [];
+}
+
 // ---------- Validation admin (0005_fleet_multi_user.sql) ----------
 
 async function signPhoto(bucket, path) {

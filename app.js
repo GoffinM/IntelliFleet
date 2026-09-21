@@ -32,6 +32,9 @@ import {
   countUnvalidatedEntries,
   listValidatedFuelEventsAll,
   listValidatedLogbookEntriesAll,
+  listMyOpenLogbookTrips,
+  countMyOpenLogbookTrips,
+  listOpenTripsOnVehicleByOthers,
 } from './api.js';
 import { buildScopeDashboard, groupVehiclesByFleetGroup, formatMonthLabel } from './dashboard.js';
 
@@ -209,6 +212,7 @@ async function route() {
     if (page === 'vehicle-form') return await renderVehicleForm();
     if (page === 'driver-form') return await renderDriverForm();
     if (page === 'validation') return await renderValidation();
+    if (page === 'close-trip') return await renderCloseTrip();
     return await renderHome();
   } catch (e) {
     setError(e);
@@ -293,7 +297,11 @@ function renderNoProfile() {
 async function renderHome() {
   setLoading();
   const isAdmin = currentProfile?.role === 'admin';
-  const [vehicles, pendingCount] = await Promise.all([listVehicles(), isAdmin ? countUnvalidatedEntries() : Promise.resolve(0)]);
+  const [vehicles, pendingCount, myOpenTripsCount] = await Promise.all([
+    listVehicles(),
+    isAdmin ? countUnvalidatedEntries() : Promise.resolve(0),
+    countMyOpenLogbookTrips(),
+  ]);
   const activeVehicleId = getActiveVehicleId(vehicles);
   const activeVehicle = vehicles.find((v) => v.id === activeVehicleId) ?? null;
   const lastEvent = activeVehicleId ? await getLastFuelEvent(activeVehicleId) : null;
@@ -354,6 +362,7 @@ async function renderHome() {
         <div class="btn-row" style="margin-top:auto">
           <button class="btn btn-primary" id="btn-new-fuel" ${!activeVehicleId ? 'disabled' : ''}>Nouveau plein</button>
           <button class="btn btn-secondary" id="btn-new-logbook" ${!activeVehicleId ? 'disabled' : ''}>Nouveau relevé</button>
+          <button class="btn btn-secondary" id="btn-close-trip">Fermer un trajet${myOpenTripsCount > 0 ? ` (${myOpenTripsCount})` : ''}</button>
         </div>
         <button class="btn btn-destructive" id="btn-logout">Se déconnecter</button>
       </div>
@@ -373,7 +382,82 @@ async function renderHome() {
   document.getElementById('btn-new-logbook')?.addEventListener('click', () => {
     location.hash = `#/logbook-entry?vehicleId=${activeVehicleId}`;
   });
+  document.getElementById('btn-close-trip').addEventListener('click', () => {
+    location.hash = '#/close-trip';
+  });
   document.getElementById('btn-logout').addEventListener('click', () => supabase.auth.signOut());
+}
+
+// ---------- Écran : fermer un trajet ----------
+
+function myOpenTripRowHtml(trip) {
+  return `
+    <div class="timeline-row" role="button" tabindex="0" data-id="${trip.id}">
+      <span class="timeline-dot logbook"></span>
+      <span class="timeline-content">
+        <span class="timeline-header">
+          <span class="timeline-title">${escapeHtml(trip.vehicleName)}</span>
+          <span class="timeline-date">${trip.eventDate}</span>
+        </span>
+        <span class="timeline-line">${trip.km.toLocaleString('fr-FR')} km (ouverture)</span>
+        ${trip.driverName ? `<span class="timeline-line">Chauffeur : ${escapeHtml(trip.driverName)}</span>` : ''}
+      </span>
+    </div>
+  `;
+}
+
+// Non cliquable, volontairement : un chauffeur ne peut pas clôturer à la place
+// d'un autre — purement informatif (voir open_trips_other_drivers, 0008).
+function otherOpenTripRowHtml(trip) {
+  return `
+    <div class="timeline-row" style="cursor:default">
+      <span class="timeline-dot logbook"></span>
+      <span class="timeline-content">
+        <span class="timeline-header">
+          <span class="timeline-title">${trip.driver_name ? escapeHtml(trip.driver_name) : 'Chauffeur non renseigné'}</span>
+          <span class="timeline-date">${trip.event_date}</span>
+        </span>
+        <span class="timeline-line">${trip.km.toLocaleString('fr-FR')} km (ouverture)</span>
+      </span>
+    </div>
+  `;
+}
+
+async function renderCloseTrip() {
+  setLoading();
+  const [vehicles, myTrips] = await Promise.all([listVehicles(), listMyOpenLogbookTrips()]);
+  const activeVehicleId = getActiveVehicleId(vehicles);
+  const activeVehicle = vehicles.find((v) => v.id === activeVehicleId) ?? null;
+  const othersOnActive = activeVehicleId ? await listOpenTripsOnVehicleByOthers(activeVehicleId) : [];
+
+  setContent(`
+    ${topBarHtml('Fermer un trajet')}
+    <div class="screen-narrow">
+    <div class="section-label">Tes trajets ouverts</div>
+    ${myTrips.length === 0 ? '<p class="empty-text">Aucun trajet ouvert.</p>' : myTrips.map(myOpenTripRowHtml).join('')}
+
+    ${
+      activeVehicle && othersOnActive.length > 0
+        ? `
+    <div class="section-label">Sur ${escapeHtml(activeVehicle.name)}</div>
+    ${othersOnActive.map(otherOpenTripRowHtml).join('')}
+    `
+        : ''
+    }
+    </div>
+  `);
+
+  document.querySelectorAll('.timeline-row[data-id]').forEach((row) => {
+    row.addEventListener('click', () => {
+      location.hash = `#/logbook-entry/${row.dataset.id}`;
+    });
+    row.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' || e.key === ' ') {
+        e.preventDefault();
+        location.hash = `#/logbook-entry/${row.dataset.id}`;
+      }
+    });
+  });
 }
 
 // ---------- Écran : historique ----------
