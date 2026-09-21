@@ -26,17 +26,31 @@ export function formatMonthLabel(month) {
   return `${MONTH_NAMES_FR[parseInt(m, 10) - 1]} ${year}`;
 }
 
-/** Fusionne pleins + relevés d'UN véhicule en une seule chronologie triée. */
+/** Fusionne pleins + relevés d'UN véhicule en une seule chronologie triée.
+ *
+ * Relevé clôturé (0007_logbook_close.sql) : génère DEUX points au lieu d'un —
+ * un point d'ouverture (comme aujourd'hui) et un point de clôture
+ * (close_at/close_km, SANS chauffeur, volontairement). Le segment entre les
+ * deux est donc automatiquement attribué au chauffeur qui a ouvert le trajet,
+ * indépendant de l'événement suivant. Le segment qui commence après le point
+ * de clôture retombe sur la règle générique déjà existante : sans chauffeur
+ * assigné sur son point d'ouverture, il reste "non attribué" — aucune règle
+ * spéciale à coder ici, c'est la même boucle que pour tout autre point. Un
+ * relevé non clôturé (close_km null) ne génère toujours qu'un seul point,
+ * comportement inchangé. */
 export function buildVehicleTimeline(vehicleId, fuelEvents, logbookEntries) {
-  const events = [...fuelEvents, ...logbookEntries]
-    .filter((e) => e.vehicle_id === vehicleId)
-    .map((e) => ({
-      date: e.event_date,
-      createdAt: e.created_at,
-      km: e.km,
-      driverId: e.driver_id ?? null,
-      driverName: e.driver_name ?? null,
-    }));
+  const events = [];
+  for (const e of fuelEvents) {
+    if (e.vehicle_id !== vehicleId) continue;
+    events.push({ date: e.event_date, createdAt: e.created_at, km: e.km, driverId: e.driver_id ?? null, driverName: e.driver_name ?? null });
+  }
+  for (const e of logbookEntries) {
+    if (e.vehicle_id !== vehicleId) continue;
+    events.push({ date: e.event_date, createdAt: e.created_at, km: e.km, driverId: e.driver_id ?? null, driverName: e.driver_name ?? null });
+    if (e.close_km != null) {
+      events.push({ date: e.close_at, createdAt: e.close_at, km: e.close_km, driverId: null, driverName: null });
+    }
+  }
   events.sort((a, b) => {
     if (a.date !== b.date) return a.date < b.date ? -1 : 1;
     if (a.createdAt === b.createdAt) return 0;

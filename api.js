@@ -223,6 +223,8 @@ export async function createLogbookEntry(input) {
       km: input.km,
       event_date: input.eventDate,
       comment: input.comment,
+      close_km: input.closeKm ?? null,
+      close_at: input.closeAt ?? null,
     })
     .select()
     .single();
@@ -239,6 +241,8 @@ export async function updateLogbookEntry(id, input) {
       km: input.km,
       event_date: input.eventDate,
       comment: input.comment,
+      close_km: input.closeKm ?? null,
+      close_at: input.closeAt ?? null,
     })
     .eq('id', id)
     .select()
@@ -473,7 +477,7 @@ export async function listValidatedFuelEventsAll() {
 export async function listValidatedLogbookEntriesAll() {
   const { data, error } = await supabase
     .from('logbook_entries')
-    .select('id, vehicle_id, driver_id, event_date, km, created_at, drivers(name)')
+    .select('id, vehicle_id, driver_id, event_date, km, close_km, close_at, created_at, drivers(name)')
     .not('validated_at', 'is', null)
     .order('event_date', { ascending: true })
     .order('created_at', { ascending: true });

@@ -56,6 +56,27 @@ function todayIso() {
   return new Date().toISOString().slice(0, 10);
 }
 
+// ---------- Clôture de trajet (0007_logbook_close.sql) ----------
+
+/** ISO ("2026-09-05T14:30:00.000Z") -> valeur d'un input datetime-local, en heure
+ *  locale du navigateur ("2026-09-05T16:30" en UTC+2 par ex.). */
+function toDatetimeLocalValue(iso) {
+  if (!iso) return '';
+  const d = new Date(iso);
+  const pad = (n) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
+}
+
+/** Avertissement non bloquant, même esprit que checkKmConsistency : le km de
+ *  clôture ne devrait jamais être inférieur au km de départ du même relevé. */
+function computeCloseKmWarning(km, closeKm) {
+  const k = parseInt(km, 10);
+  const ck = parseInt(closeKm, 10);
+  if (!closeKm || Number.isNaN(k) || Number.isNaN(ck)) return null;
+  if (ck < k) return `Km de clôture inférieur au km de départ (${k.toLocaleString('fr-FR')} km).`;
+  return null;
+}
+
 function setContent(html) {
   document.getElementById('app').innerHTML = html;
 }
@@ -381,6 +402,7 @@ function toTimeline(fuelEvents, logbookEntries) {
     comment: e.comment,
     hasPhoto: e.photo_storage_path !== null,
     validatedAt: e.validated_at,
+    closeKm: e.close_km,
   }));
   return [...fuelItems, ...logbookItems].sort((a, b) => {
     if (a.date !== b.date) return a.date < b.date ? 1 : -1;
@@ -409,6 +431,7 @@ function renderTimelineRow(item) {
           <span class="timeline-title">${kindLabel}</span>
           <span style="display:flex;align-items:center;gap:8px">
             <span class="badge ${item.validatedAt ? 'badge-validated' : 'badge-pending'}">${item.validatedAt ? 'Validé' : 'Non validé'}</span>
+            ${item.kind === 'logbook' && item.closeKm == null ? '<span class="badge badge-open">Ouvert</span>' : ''}
             <span class="timeline-date">${item.date}</span>
           </span>
         </span>
@@ -743,6 +766,8 @@ async function renderLogbookEntryForm(editingId, presetVehicleId) {
     eventDate: existing ? existing.event_date : todayIso(),
     km: existing ? String(existing.km) : '',
     comment: existing ? (existing.comment ?? '') : '',
+    closeKm: existing?.close_km != null ? String(existing.close_km) : '',
+    closeAt: existing ? toDatetimeLocalValue(existing.close_at) : '',
   };
   const originalPhotoUrl = existing ? existing.photoSignedUrl : null;
   const photo = { file: null, previewUrl: originalPhotoUrl };
@@ -782,6 +807,17 @@ async function renderLogbookEntryForm(editingId, presetVehicleId) {
       <p class="warning" id="km-warning" hidden></p>
       <div class="field"><label>Commentaire (optionnel)</label><textarea id="f-comment" ${locked ? 'disabled' : ''}>${escapeHtml(state.comment)}</textarea></div>
 
+      ${
+        editingId
+          ? `
+      <div class="section-label">Clôture du trajet (optionnelle)</div>
+      <div class="field"><label>Km de clôture</label><input type="number" inputmode="numeric" id="f-close-km" value="${escapeHtml(state.closeKm)}" ${locked ? 'disabled' : ''}></div>
+      <div class="field"><label>Heure de clôture</label><input type="datetime-local" id="f-close-at" value="${escapeHtml(state.closeAt)}" ${locked ? 'disabled' : ''}></div>
+      <p class="warning" id="close-km-warning" hidden></p>
+      `
+          : ''
+      }
+
       <p class="error" id="form-error" hidden></p>
       ${
         locked
@@ -795,6 +831,7 @@ async function renderLogbookEntryForm(editingId, presetVehicleId) {
     `);
 
     renderKmWarning();
+    renderCloseKmWarning();
 
     if (locked) return;
 
@@ -816,8 +853,14 @@ async function renderLogbookEntryForm(editingId, presetVehicleId) {
     document.getElementById('f-km').addEventListener('input', (e) => {
       state.km = e.target.value;
       renderKmWarning();
+      renderCloseKmWarning();
     });
     document.getElementById('f-comment').addEventListener('input', (e) => (state.comment = e.target.value));
+    document.getElementById('f-close-km')?.addEventListener('input', (e) => {
+      state.closeKm = e.target.value;
+      renderCloseKmWarning();
+    });
+    document.getElementById('f-close-at')?.addEventListener('input', (e) => (state.closeAt = e.target.value));
 
     wirePhotoInputs(document.getElementById('photo-grid'), (_type, file) => {
       photo.file = file;
@@ -838,6 +881,14 @@ async function renderLogbookEntryForm(editingId, presetVehicleId) {
     el.hidden = !warning;
   }
 
+  function renderCloseKmWarning() {
+    const el = document.getElementById('close-km-warning');
+    if (!el) return;
+    const warning = computeCloseKmWarning(state.km, state.closeKm);
+    el.textContent = warning ?? '';
+    el.hidden = !warning;
+  }
+
   async function handleSubmit() {
     const errorEl = document.getElementById('form-error');
     const submitBtn = document.getElementById('btn-submit');
@@ -853,6 +904,17 @@ async function renderLogbookEntryForm(editingId, presetVehicleId) {
       errorEl.hidden = false;
       return;
     }
+    // Clôture optionnelle, mais jamais à moitié renseignée : un close_km sans
+    // close_at (ou l'inverse) ferait planter l'algorithme de segmentation du
+    // tableau de bord (monthKey(null)) — protégé aussi en base (0007), mais
+    // autant l'empêcher ici avant l'aller-retour serveur.
+    const closeKmNum = state.closeKm ? parseInt(state.closeKm, 10) : null;
+    const closeAtIso = state.closeAt ? new Date(state.closeAt).toISOString() : null;
+    if ((closeKmNum != null) !== (closeAtIso != null)) {
+      errorEl.textContent = 'Km de clôture et heure de clôture doivent être renseignés ensemble (ou laissés vides).';
+      errorEl.hidden = false;
+      return;
+    }
 
     submitBtn.disabled = true;
     submitBtn.textContent = 'Enregistrement…';
@@ -863,6 +925,8 @@ async function renderLogbookEntryForm(editingId, presetVehicleId) {
         km: kmNum,
         eventDate: state.eventDate,
         comment: state.comment.trim() || null,
+        closeKm: closeKmNum,
+        closeAt: closeAtIso,
       };
       const entry = editingId ? await updateLogbookEntry(editingId, input) : await createLogbookEntry(input);
 

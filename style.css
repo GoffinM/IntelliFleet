@@ -416,6 +416,11 @@ h1 {
   color: var(--amber);
 }
 
+.badge-open {
+  background: var(--blue-bg);
+  color: var(--blue);
+}
+
 .validation-thumbs {
   display: flex;
   flex-wrap: wrap;
