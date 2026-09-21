@@ -1,7 +1,7 @@
 // Couche data Supabase — port direct des fichiers src/features/*/api.ts de la version
 // React Native, adapté au File/Blob natif du navigateur (input file) au lieu de
 // fetch(uri).arrayBuffer() sur un chemin local RN.
-import { supabase } from './supabase-client.js?v=202609212212';
+import { supabase } from './supabase-client.js?v=202609212228';
 
 export const PHOTO_TYPES = [
   { type: 'vehicle_plate', label: 'Véhicule + plaque' },
@@ -533,7 +533,7 @@ function mapDashboardRow(row) {
 export async function listValidatedFuelEventsAll() {
   const { data, error } = await supabase
     .from('fuel_events')
-    .select('id, vehicle_id, driver_id, event_date, km, liters, amount, created_at, drivers(name)')
+    .select('id, vehicle_id, driver_id, event_date, km, liters, amount, unit_price, station, created_at, drivers(name)')
     .not('validated_at', 'is', null)
     .order('event_date', { ascending: true })
     .order('created_at', { ascending: true });
@@ -545,7 +545,7 @@ export async function listValidatedFuelEventsAll() {
 export async function listValidatedLogbookEntriesAll() {
   const { data, error } = await supabase
     .from('logbook_entries')
-    .select('id, vehicle_id, driver_id, event_date, km, close_km, close_at, created_at, drivers(name)')
+    .select('id, vehicle_id, driver_id, event_date, km, comment, close_km, close_at, created_at, drivers(name)')
     .not('validated_at', 'is', null)
     .order('event_date', { ascending: true })
     .order('created_at', { ascending: true });

@@ -1,6 +1,6 @@
 // IntelliFleet PWA — routing (hash) + 4 écrans, vanilla JS, sans framework.
-import { supabase } from './supabase-client.js?v=202609212212';
-import { checkKmConsistency } from './km-consistency.js?v=202609212212';
+import { supabase } from './supabase-client.js?v=202609212228';
+import { checkKmConsistency } from './km-consistency.js?v=202609212228';
 import {
   PHOTO_TYPES,
   listVehicles,
@@ -38,8 +38,8 @@ import {
   analyzeOdometerPhoto,
   saveFuelEventOcrResult,
   saveLogbookEntryOcrResult,
-} from './api.js?v=202609212212';
-import { buildScopeDashboard, groupVehiclesByFleetGroup, formatMonthLabel } from './dashboard.js?v=202609212212';
+} from './api.js?v=202609212228';
+import { buildScopeDashboard, groupVehiclesByFleetGroup, formatMonthLabel } from './dashboard.js?v=202609212228';
 
 const ACTIVE_VEHICLE_KEY = 'intellifleet:active_vehicle_id';
 const AMOUNT_TOLERANCE_RATIO = 0.005; // 0.5 %
@@ -78,6 +78,34 @@ function escapeHtml(value) {
 
 function todayIso() {
   return new Date().toISOString().slice(0, 10);
+}
+
+// ---------- Export CSV (Tableau de bord) ----------
+
+/** Échappement CSV standard : entoure de guillemets et double les guillemets
+ *  internes dès qu'une virgule, un guillemet ou un retour à la ligne est présent
+ *  (typiquement un commentaire ou un nom de station libre). */
+function csvEscape(value) {
+  if (value === null || value === undefined) return '';
+  const s = String(value);
+  if (/[",\r\n]/.test(s)) {
+    return `"${s.replace(/"/g, '""')}"`;
+  }
+  return s;
+}
+
+/** Déclenche un téléchargement 100% navigateur (Blob + lien temporaire), sans
+ *  librairie. BOM UTF-8 en tête pour qu'Excel affiche correctement les accents. */
+function downloadCsv(content, filename) {
+  const blob = new Blob(['﻿' + content], { type: 'text/csv;charset=utf-8;' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
 }
 
 // ---------- Clôture de trajet (0007_logbook_close.sql) ----------
@@ -1731,6 +1759,50 @@ async function renderValidation() {
     return vehicles.map((v) => v.id);
   }
 
+  /** CSV des entrées VALIDÉES de la vue actuellement sélectionnée — réutilise les
+   *  données déjà chargées (validatedFuelAll/validatedLogbookAll, mêmes tableaux
+   *  que ceux qui alimentent le graphique/les tableaux), pas de requête séparée. */
+  function buildCsvForScope(scopeIds) {
+    const scopeSet = new Set(scopeIds);
+    const vehicleName = (id) => vehicles.find((v) => v.id === id)?.name ?? '';
+
+    const rows = [];
+    for (const e of validatedFuelAll) {
+      if (!scopeSet.has(e.vehicle_id)) continue;
+      rows.push([
+        'Plein',
+        vehicleName(e.vehicle_id),
+        e.event_date,
+        e.km,
+        e.driver_name ?? '',
+        e.liters ?? '',
+        e.unit_price ?? '',
+        e.amount ?? '',
+        e.station ?? '',
+        '', // commentaire : ne s'applique pas à un plein
+      ]);
+    }
+    for (const e of validatedLogbookAll) {
+      if (!scopeSet.has(e.vehicle_id)) continue;
+      rows.push([
+        'Relevé',
+        vehicleName(e.vehicle_id),
+        e.event_date,
+        e.km,
+        e.driver_name ?? '',
+        '', // litres/prix unitaire/montant/station : ne s'appliquent pas à un relevé
+        '',
+        '',
+        '',
+        e.comment ?? '',
+      ]);
+    }
+    rows.sort((a, b) => (a[2] < b[2] ? -1 : a[2] > b[2] ? 1 : 0)); // par date croissante
+
+    const header = ['Type', 'Véhicule', 'Date', 'Km', 'Chauffeur', 'Litres', 'Prix unitaire', 'Montant', 'Station', 'Commentaire'];
+    return [header, ...rows].map((row) => row.map(csvEscape).join(',')).join('\r\n');
+  }
+
   function drawDashboardZone() {
     const scopeIds = vehicleIdsForScope();
     const scopeSet = new Set(scopeIds);
@@ -1754,6 +1826,7 @@ async function renderValidation() {
             ${DASHBOARD_VIEWS.map(
               (v) => `<button class="chip ${dashboardState.view === v.key ? 'active' : ''}" data-view="${v.key}">${v.label}</button>`
             ).join('')}
+            <button class="btn btn-secondary btn-sm" id="btn-export-csv" type="button">Exporter en CSV</button>
           </div>
 
           ${
@@ -1792,6 +1865,11 @@ async function renderValidation() {
         </div>
       </div>
     `;
+
+    zone.querySelector('#btn-export-csv')?.addEventListener('click', () => {
+      const csv = buildCsvForScope(scopeIds);
+      downloadCsv(csv, `intellifleet-export-${todayIso()}.csv`);
+    });
 
     zone.querySelectorAll('[data-view]').forEach((btn) => {
       btn.addEventListener('click', () => {
