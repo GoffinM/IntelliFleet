@@ -8,10 +8,24 @@
     <meta name="theme-color" content="#2563eb" />
     <link rel="icon" href="./icon-192.svg" />
     <link rel="apple-touch-icon" href="./icon-192.svg" />
-    <link rel="stylesheet" href="./style.css" />
+    <link rel="stylesheet" href="./style.css?v=202609212212" />
   </head>
   <body>
+    <!--
+      Anti-cache (voir scripts/bump-cache-version.mjs) : le ?v=... ci-dessus et sur
+      app.js ci-dessous, ET sur chaque import local à l'intérieur d'app.js/api.js
+      (./api.js, ./dashboard.js, ./km-consistency.js, ./supabase-client.js), doit
+      changer à CHAQUE déploiement — sinon le navigateur peut continuer à servir
+      une ancienne version d'un fichier importé même après avoir rechargé app.js
+      lui-même (un import ES relatif est une URL à part entière pour le cache du
+      navigateur). Commande à lancer avant de committer un déploiement :
+
+        node scripts/bump-cache-version.mjs
+
+      Elle met à jour toutes ces occurrences d'un coup — un seul geste, rien à
+      se rappeler fichier par fichier.
+    -->
     <div id="app"></div>
-    <script type="module" src="./app.js"></script>
+    <script type="module" src="./app.js?v=202609212212"></script>
   </body>
 </html>

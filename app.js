@@ -1,6 +1,6 @@
 // IntelliFleet PWA — routing (hash) + 4 écrans, vanilla JS, sans framework.
-import { supabase } from './supabase-client.js';
-import { checkKmConsistency } from './km-consistency.js';
+import { supabase } from './supabase-client.js?v=202609212212';
+import { checkKmConsistency } from './km-consistency.js?v=202609212212';
 import {
   PHOTO_TYPES,
   listVehicles,
@@ -38,8 +38,8 @@ import {
   analyzeOdometerPhoto,
   saveFuelEventOcrResult,
   saveLogbookEntryOcrResult,
-} from './api.js';
-import { buildScopeDashboard, groupVehiclesByFleetGroup, formatMonthLabel } from './dashboard.js';
+} from './api.js?v=202609212212';
+import { buildScopeDashboard, groupVehiclesByFleetGroup, formatMonthLabel } from './dashboard.js?v=202609212212';
 
 const ACTIVE_VEHICLE_KEY = 'intellifleet:active_vehicle_id';
 const AMOUNT_TOLERANCE_RATIO = 0.005; // 0.5 %
@@ -360,7 +360,7 @@ async function renderHome() {
         <div class="link-row">
           <a href="#/vehicle-form">+ Véhicule</a>
           <a href="#/driver-form">+ Chauffeur</a>
-          <a href="#/validation">Validation${pendingCount > 0 ? ` (${pendingCount})` : ''}</a>
+          <a href="#/validation">Tableau de bord${pendingCount > 0 ? ` (${pendingCount})` : ''}</a>
         </div>
         `
             : ''
@@ -1561,7 +1561,7 @@ async function renderValidation() {
   }
 
   setContent(`
-    ${topBarHtml('Validation')}
+    ${topBarHtml('Tableau de bord')}
     <div class="screen-dashboard">
     <p class="error" id="validation-error" hidden></p>
 
