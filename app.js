@@ -684,6 +684,11 @@ async function renderFuelEventForm(editingId, presetVehicleId) {
   // trompeur (des champs qu'on peut remplir pour rien).
   const locked = !!(existing?.validated_at) && currentProfile?.role !== 'admin';
 
+  // Bouton "Valider" : admin only, seulement sur une entrée existante pas encore
+  // validée (une fois validated_at posé, plus besoin — l'admin garde Enregistrer/
+  // Supprimer comme avant).
+  const canValidate = !!editingId && !!existing && !existing.validated_at && currentProfile?.role === 'admin';
+
   // OCR compteur (0009_ocr_odometer.sql) : lecture de référence, jamais modifiée
   // depuis cet écran — juste affichée à titre indicatif si elle diverge du km saisi.
   const ocrKm = existing?.ocr_km ?? null;
@@ -731,7 +736,10 @@ async function renderFuelEventForm(editingId, presetVehicleId) {
         locked
           ? ''
           : `
-      <button class="btn btn-primary" id="btn-submit">${editingId ? 'Enregistrer les modifications' : 'Enregistrer'}</button>
+      <div class="btn-row">
+        <button class="btn btn-primary" id="btn-submit">${editingId ? 'Enregistrer les modifications' : 'Enregistrer'}</button>
+        ${canValidate ? '<button class="btn btn-secondary" id="btn-validate">Valider</button>' : ''}
+      </div>
       ${editingId ? '<button class="btn btn-destructive" id="btn-delete">Supprimer ce plein</button>' : ''}
       `
       }
@@ -785,6 +793,7 @@ async function renderFuelEventForm(editingId, presetVehicleId) {
     });
 
     document.getElementById('btn-submit').addEventListener('click', handleSubmit);
+    document.getElementById('btn-validate')?.addEventListener('click', handleValidate);
     document.getElementById('btn-delete')?.addEventListener('click', handleDelete);
   }
 
@@ -813,14 +822,15 @@ async function renderFuelEventForm(editingId, presetVehicleId) {
     el.hidden = !warning;
   }
 
-  async function handleSubmit() {
+  /** Valide les champs et construit l'input pour createFuelEvent/updateFuelEvent.
+   *  Affiche elle-même l'erreur et renvoie null si un champ est invalide — partagé
+   *  entre "Enregistrer" et "Valider", mêmes règles pour les deux. */
+  function validateAndBuildInput() {
     const errorEl = document.getElementById('form-error');
-    const submitBtn = document.getElementById('btn-submit');
-    errorEl.hidden = true;
     if (!state.vehicleId) {
       errorEl.textContent = 'Sélectionne un véhicule.';
       errorEl.hidden = false;
-      return;
+      return null;
     }
     const kmNum = parseInt(state.km, 10);
     const litersNum = parseFloat(state.liters);
@@ -829,42 +839,97 @@ async function renderFuelEventForm(editingId, presetVehicleId) {
     if (!state.eventDate || Number.isNaN(kmNum) || Number.isNaN(litersNum) || Number.isNaN(unitPriceNum) || Number.isNaN(amountNum)) {
       errorEl.textContent = 'Vérifie la date, le km, les litres, le prix unitaire et le montant.';
       errorEl.hidden = false;
-      return;
+      return null;
     }
+    return {
+      vehicleId: state.vehicleId,
+      driverId: state.driverId,
+      eventDate: state.eventDate,
+      km: kmNum,
+      liters: litersNum,
+      unitPrice: unitPriceNum,
+      amount: amountNum,
+      station: state.station.trim() || null,
+      notes: state.notes.trim() || null,
+    };
+  }
 
-    submitBtn.disabled = true;
-    submitBtn.textContent = 'Enregistrement…';
-    try {
-      const input = {
-        vehicleId: state.vehicleId,
-        driverId: state.driverId,
-        eventDate: state.eventDate,
-        km: kmNum,
-        liters: litersNum,
-        unitPrice: unitPriceNum,
-        amount: amountNum,
-        station: state.station.trim() || null,
-        notes: state.notes.trim() || null,
-      };
-      const event = editingId ? await updateFuelEvent(editingId, input) : await createFuelEvent(input);
-
-      const {
-        data: { user },
-      } = await supabase.auth.getUser();
-      if (user) {
-        for (const { type } of PHOTO_TYPES) {
-          if (photoState[type].file) {
-            await uploadFuelEventPhoto({ fuelEventId: event.id, ownerId: user.id, type, file: photoState[type].file });
-          }
+  /** Enregistre (création ou mise à jour) + upload des photos changées. Partagé
+   *  entre "Enregistrer" et "Valider" — laisse les erreurs remonter à l'appelant. */
+  async function saveEntry(input) {
+    const event = editingId ? await updateFuelEvent(editingId, input) : await createFuelEvent(input);
+    const {
+      data: { user },
+    } = await supabase.auth.getUser();
+    if (user) {
+      for (const { type } of PHOTO_TYPES) {
+        if (photoState[type].file) {
+          await uploadFuelEventPhoto({ fuelEventId: event.id, ownerId: user.id, type, file: photoState[type].file });
         }
       }
+    }
+    return event;
+  }
 
+  function setActionButtonsDisabled(disabled) {
+    document.getElementById('btn-submit').disabled = disabled;
+    const validateBtn = document.getElementById('btn-validate');
+    if (validateBtn) validateBtn.disabled = disabled;
+  }
+
+  async function handleSubmit() {
+    const errorEl = document.getElementById('form-error');
+    const submitBtn = document.getElementById('btn-submit');
+    errorEl.hidden = true;
+    const input = validateAndBuildInput();
+    if (!input) return;
+
+    setActionButtonsDisabled(true);
+    submitBtn.textContent = 'Enregistrement…';
+    try {
+      await saveEntry(input);
       location.hash = editingId ? '#/history' : '#/';
     } catch (e) {
       errorEl.textContent = e.message || String(e);
       errorEl.hidden = false;
-      submitBtn.disabled = false;
+      setActionButtonsDisabled(false);
       submitBtn.textContent = editingId ? 'Enregistrer les modifications' : 'Enregistrer';
+    }
+  }
+
+  /** "Valider" : enregistre d'abord (mêmes règles que "Enregistrer"), puis valide
+   *  l'entrée — redirige vers #/validation (pas l'accueil), pour enchaîner sur
+   *  l'entrée suivante à vérifier. Erreurs distinguées : un échec d'enregistrement
+   *  n'a pas le même sens qu'un enregistrement réussi suivi d'un échec de
+   *  validation (l'admin sait alors que ses modifications sont bien passées). */
+  async function handleValidate() {
+    const errorEl = document.getElementById('form-error');
+    const validateBtn = document.getElementById('btn-validate');
+    errorEl.hidden = true;
+    const input = validateAndBuildInput();
+    if (!input) return;
+
+    setActionButtonsDisabled(true);
+    validateBtn.textContent = 'Enregistrement…';
+    try {
+      await saveEntry(input);
+    } catch (e) {
+      errorEl.textContent = `Erreur lors de l'enregistrement : ${e.message || String(e)}`;
+      errorEl.hidden = false;
+      setActionButtonsDisabled(false);
+      validateBtn.textContent = 'Valider';
+      return;
+    }
+
+    validateBtn.textContent = 'Validation…';
+    try {
+      await validateFuelEvent(editingId);
+      location.hash = '#/validation';
+    } catch (e) {
+      errorEl.textContent = `Enregistré, mais la validation a échoué : ${e.message || String(e)}`;
+      errorEl.hidden = false;
+      setActionButtonsDisabled(false);
+      validateBtn.textContent = 'Valider';
     }
   }
 
@@ -908,6 +973,10 @@ async function renderLogbookEntryForm(editingId, presetVehicleId) {
   // Verrou de validation (0005_fleet_multi_user.sql), même principe que le formulaire
   // de plein.
   const locked = !!(existing?.validated_at) && currentProfile?.role !== 'admin';
+
+  // Bouton "Valider" : admin only, seulement sur une entrée existante pas encore
+  // validée — même règle que pour le formulaire de plein.
+  const canValidate = !!editingId && !!existing && !existing.validated_at && currentProfile?.role === 'admin';
 
   // OCR compteur (0009_ocr_odometer.sql) : lecture de référence, jamais modifiée
   // depuis cet écran — juste affichée à titre indicatif si elle diverge du km saisi.
@@ -962,7 +1031,10 @@ async function renderLogbookEntryForm(editingId, presetVehicleId) {
         locked
           ? ''
           : `
-      <button class="btn btn-primary" id="btn-submit">${editingId ? 'Enregistrer les modifications' : 'Enregistrer'}</button>
+      <div class="btn-row">
+        <button class="btn btn-primary" id="btn-submit">${editingId ? 'Enregistrer les modifications' : 'Enregistrer'}</button>
+        ${canValidate ? '<button class="btn btn-secondary" id="btn-validate">Valider</button>' : ''}
+      </div>
       ${editingId ? '<button class="btn btn-destructive" id="btn-delete">Supprimer ce relevé</button>' : ''}
       `
       }
@@ -1010,6 +1082,7 @@ async function renderLogbookEntryForm(editingId, presetVehicleId) {
     });
 
     document.getElementById('btn-submit').addEventListener('click', handleSubmit);
+    document.getElementById('btn-validate')?.addEventListener('click', handleValidate);
     document.getElementById('btn-delete')?.addEventListener('click', handleDelete);
   }
 
@@ -1038,20 +1111,20 @@ async function renderLogbookEntryForm(editingId, presetVehicleId) {
     el.hidden = !warning;
   }
 
-  async function handleSubmit() {
+  /** Même patron que le formulaire de plein : partagé entre "Enregistrer" et
+   *  "Valider". */
+  function validateAndBuildInput() {
     const errorEl = document.getElementById('form-error');
-    const submitBtn = document.getElementById('btn-submit');
-    errorEl.hidden = true;
     if (!state.vehicleId) {
       errorEl.textContent = 'Sélectionne un véhicule.';
       errorEl.hidden = false;
-      return;
+      return null;
     }
     const kmNum = parseInt(state.km, 10);
     if (!state.eventDate || Number.isNaN(kmNum)) {
       errorEl.textContent = 'Vérifie la date et le km.';
       errorEl.hidden = false;
-      return;
+      return null;
     }
     // Clôture optionnelle, mais jamais à moitié renseignée : un close_km sans
     // close_at (ou l'inverse) ferait planter l'algorithme de segmentation du
@@ -1062,38 +1135,88 @@ async function renderLogbookEntryForm(editingId, presetVehicleId) {
     if ((closeKmNum != null) !== (closeAtIso != null)) {
       errorEl.textContent = 'Km de clôture et heure de clôture doivent être renseignés ensemble (ou laissés vides).';
       errorEl.hidden = false;
-      return;
+      return null;
     }
+    return {
+      vehicleId: state.vehicleId,
+      driverId: state.driverId,
+      km: kmNum,
+      eventDate: state.eventDate,
+      comment: state.comment.trim() || null,
+      closeKm: closeKmNum,
+      closeAt: closeAtIso,
+    };
+  }
 
-    submitBtn.disabled = true;
+  async function saveEntry(input) {
+    const entry = editingId ? await updateLogbookEntry(editingId, input) : await createLogbookEntry(input);
+    if (photo.file) {
+      const {
+        data: { user },
+      } = await supabase.auth.getUser();
+      if (user) {
+        await uploadLogbookEntryPhoto({ logbookEntryId: entry.id, ownerId: user.id, file: photo.file });
+      }
+    }
+    return entry;
+  }
+
+  function setActionButtonsDisabled(disabled) {
+    document.getElementById('btn-submit').disabled = disabled;
+    const validateBtn = document.getElementById('btn-validate');
+    if (validateBtn) validateBtn.disabled = disabled;
+  }
+
+  async function handleSubmit() {
+    const errorEl = document.getElementById('form-error');
+    const submitBtn = document.getElementById('btn-submit');
+    errorEl.hidden = true;
+    const input = validateAndBuildInput();
+    if (!input) return;
+
+    setActionButtonsDisabled(true);
     submitBtn.textContent = 'Enregistrement…';
     try {
-      const input = {
-        vehicleId: state.vehicleId,
-        driverId: state.driverId,
-        km: kmNum,
-        eventDate: state.eventDate,
-        comment: state.comment.trim() || null,
-        closeKm: closeKmNum,
-        closeAt: closeAtIso,
-      };
-      const entry = editingId ? await updateLogbookEntry(editingId, input) : await createLogbookEntry(input);
-
-      if (photo.file) {
-        const {
-          data: { user },
-        } = await supabase.auth.getUser();
-        if (user) {
-          await uploadLogbookEntryPhoto({ logbookEntryId: entry.id, ownerId: user.id, file: photo.file });
-        }
-      }
-
+      await saveEntry(input);
       location.hash = editingId ? '#/history' : '#/';
     } catch (e) {
       errorEl.textContent = e.message || String(e);
       errorEl.hidden = false;
-      submitBtn.disabled = false;
+      setActionButtonsDisabled(false);
       submitBtn.textContent = editingId ? 'Enregistrer les modifications' : 'Enregistrer';
+    }
+  }
+
+  /** "Valider" : voir le commentaire équivalent dans renderFuelEventForm — même
+   *  logique, juste appliquée à un relevé. */
+  async function handleValidate() {
+    const errorEl = document.getElementById('form-error');
+    const validateBtn = document.getElementById('btn-validate');
+    errorEl.hidden = true;
+    const input = validateAndBuildInput();
+    if (!input) return;
+
+    setActionButtonsDisabled(true);
+    validateBtn.textContent = 'Enregistrement…';
+    try {
+      await saveEntry(input);
+    } catch (e) {
+      errorEl.textContent = `Erreur lors de l'enregistrement : ${e.message || String(e)}`;
+      errorEl.hidden = false;
+      setActionButtonsDisabled(false);
+      validateBtn.textContent = 'Valider';
+      return;
+    }
+
+    validateBtn.textContent = 'Validation…';
+    try {
+      await validateLogbookEntry(editingId);
+      location.hash = '#/validation';
+    } catch (e) {
+      errorEl.textContent = `Enregistré, mais la validation a échoué : ${e.message || String(e)}`;
+      errorEl.hidden = false;
+      setActionButtonsDisabled(false);
+      validateBtn.textContent = 'Valider';
     }
   }
 
