@@ -101,6 +101,20 @@ function vehicleChipsHtml(vehicles, activeId) {
     .join('');
 }
 
+// Barre de navigation sticky (retour terrain : éviter d'avoir à redescendre tout en
+// bas de l'écran pour revenir à l'accueil). Toujours un enfant direct de #app, JAMAIS
+// à l'intérieur d'un wrapper screen-narrow/wide/dashboard/home — ces derniers peuvent
+// devenir une "carte" avec son propre padding/radius sur desktop, ce qui casserait
+// visuellement une barre sticky posée à l'intérieur.
+function topBarHtml(title, { showBack = true } = {}) {
+  return `
+    <div class="top-bar">
+      ${showBack ? '<a href="#/" class="top-bar-back">← Accueil</a>' : ''}
+      <h1 class="top-bar-title">${escapeHtml(title)}</h1>
+    </div>
+  `;
+}
+
 // ---------- Routing ----------
 
 function parseHash() {
@@ -265,9 +279,8 @@ async function renderHome() {
   const lastEvent = activeVehicleId ? await getLastFuelEvent(activeVehicleId) : null;
 
   setContent(`
+    ${topBarHtml('IntelliFleet', { showBack: false })}
     <div class="screen-home">
-    <h1>IntelliFleet</h1>
-
     <div class="home-layout">
       <div class="home-nav">
         <div>
@@ -424,12 +437,11 @@ async function renderHistory() {
   }
 
   setContent(`
+    ${topBarHtml('Historique')}
     <div class="screen-wide">
-    <h1>Historique</h1>
     <div class="chip-row" id="vehicle-chips">${vehicleChipsHtml(vehicles, activeVehicleId)}</div>
     ${items.length === 0 ? '<p class="empty-text">Aucun événement enregistré pour ce véhicule.</p>' : ''}
     <div class="timeline-list">${items.map(renderTimelineRow).join('')}</div>
-    <a href="#/">← Accueil</a>
     </div>
   `);
 
@@ -540,8 +552,8 @@ async function renderFuelEventForm(editingId, presetVehicleId) {
 
   function renderForm() {
     setContent(`
+      ${topBarHtml(editingId ? 'Modifier le plein' : 'Nouveau plein')}
       <div class="screen-narrow">
-      <h1>${editingId ? 'Modifier le plein' : 'Nouveau plein'}</h1>
 
       ${locked ? `<p class="warning">Validé le ${existing.validated_at.slice(0, 10)} — modification impossible.</p>` : ''}
 
@@ -579,7 +591,6 @@ async function renderFuelEventForm(editingId, presetVehicleId) {
       ${editingId ? '<button class="btn btn-destructive" id="btn-delete">Supprimer ce plein</button>' : ''}
       `
       }
-      <a href="#/">← Annuler</a>
       </div>
     `);
 
@@ -748,8 +759,8 @@ async function renderLogbookEntryForm(editingId, presetVehicleId) {
 
   function renderForm() {
     setContent(`
+      ${topBarHtml(editingId ? 'Modifier le relevé' : 'Nouveau relevé')}
       <div class="screen-narrow">
-      <h1>${editingId ? 'Modifier le relevé' : 'Nouveau relevé'}</h1>
 
       ${locked ? `<p class="warning">Validé le ${existing.validated_at.slice(0, 10)} — modification impossible.</p>` : ''}
 
@@ -782,7 +793,6 @@ async function renderLogbookEntryForm(editingId, presetVehicleId) {
       ${editingId ? '<button class="btn btn-destructive" id="btn-delete">Supprimer ce relevé</button>' : ''}
       `
       }
-      <a href="#/">← Annuler</a>
       </div>
     `);
 
@@ -895,8 +905,8 @@ async function renderLogbookEntryForm(editingId, presetVehicleId) {
 
 async function renderVehicleForm() {
   setContent(`
+    ${topBarHtml('Nouveau véhicule')}
     <div class="screen-narrow">
-    <h1>Nouveau véhicule</h1>
     <div class="field"><label>Nom</label><input type="text" id="f-name"></div>
     <div class="field"><label>Plaque</label><input type="text" id="f-plate"></div>
     <div class="field"><label>Marque</label><input type="text" id="f-make"></div>
@@ -907,7 +917,6 @@ async function renderVehicleForm() {
     <div class="field"><label>Groupe de flotte (optionnel)</label><input type="text" id="f-fleet-group" placeholder="ex. Privés, SHER Rwanda, SHER Burundi"></div>
     <p class="error" id="form-error" hidden></p>
     <button class="btn btn-primary" id="btn-submit">Créer le véhicule</button>
-    <a href="#/">← Annuler</a>
     </div>
   `);
 
@@ -957,12 +966,11 @@ async function renderVehicleForm() {
 
 async function renderDriverForm() {
   setContent(`
+    ${topBarHtml('Nouveau chauffeur')}
     <div class="screen-narrow">
-    <h1>Nouveau chauffeur</h1>
     <div class="field"><label>Nom</label><input type="text" id="f-name"></div>
     <p class="error" id="form-error" hidden></p>
     <button class="btn btn-primary" id="btn-submit">Créer le chauffeur</button>
-    <a href="#/">← Annuler</a>
     </div>
   `);
 
@@ -1028,8 +1036,8 @@ async function renderValidation() {
   const done = [...doneFuel, ...doneLogbook].sort(byDateDesc);
 
   setContent(`
+    ${topBarHtml('Validation')}
     <div class="screen-wide">
-    <h1>Validation</h1>
     <p class="error" id="validation-error" hidden></p>
 
     <div class="section-label">À valider (${pending.length})</div>
@@ -1037,8 +1045,6 @@ async function renderValidation() {
 
     <div class="section-label">Validées récemment</div>
     ${done.length === 0 ? '<p class="empty-text">Aucune entrée validée récemment.</p>' : `<div class="card-grid">${done.map(validationRowHtml).join('')}</div>`}
-
-    <a href="#/">← Accueil</a>
     </div>
   `);
 
@@ -1210,9 +1216,8 @@ async function renderDashboard() {
     const monthlyAsc = [...monthly].reverse();
 
     setContent(`
+      ${topBarHtml('Tableau de bord')}
       <div class="screen-dashboard">
-      <h1>Tableau de bord</h1>
-
       <div class="dashboard-layout">
         <div class="dashboard-controls">
           <div class="chip-row">
@@ -1256,8 +1261,6 @@ async function renderDashboard() {
           ${dashboardDriverTableHtml(drivers)}
         </div>
       </div>
-
-      <a href="#/">← Accueil</a>
       </div>
     `);
 
