@@ -91,6 +91,18 @@ function toDatetimeLocalValue(iso) {
   return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
 }
 
+/** Info non bloquante sur l'écran d'édition (0009_ocr_odometer.sql) : signale un
+ *  écart entre la lecture Claude Vision et le km saisi. Rien si pas encore
+ *  analysé, ou si l'écart est dans la tolérance (même seuil que l'écran
+ *  Validation) — pas de bruit inutile quand tout concorde. */
+function computeOcrKmInfo(km, ocrKm, ocrAnalyzedAt) {
+  if (!ocrAnalyzedAt || ocrKm == null) return null;
+  const k = parseInt(km, 10);
+  if (Number.isNaN(k)) return null;
+  if (Math.abs(ocrKm - k) <= OCR_KM_TOLERANCE) return null;
+  return `Claude Vision a lu ${ocrKm.toLocaleString('fr-FR')} km sur la photo.`;
+}
+
 /** Avertissement non bloquant, même esprit que checkKmConsistency : le km de
  *  clôture ne devrait jamais être inférieur au km de départ du même relevé. */
 function computeCloseKmWarning(km, closeKm) {
@@ -672,6 +684,11 @@ async function renderFuelEventForm(editingId, presetVehicleId) {
   // trompeur (des champs qu'on peut remplir pour rien).
   const locked = !!(existing?.validated_at) && currentProfile?.role !== 'admin';
 
+  // OCR compteur (0009_ocr_odometer.sql) : lecture de référence, jamais modifiée
+  // depuis cet écran — juste affichée à titre indicatif si elle diverge du km saisi.
+  const ocrKm = existing?.ocr_km ?? null;
+  const ocrAnalyzedAt = existing?.ocr_analyzed_at ?? null;
+
   function currentVehicle() {
     return vehicles.find((v) => v.id === state.vehicleId) ?? null;
   }
@@ -701,6 +718,7 @@ async function renderFuelEventForm(editingId, presetVehicleId) {
       <div class="field"><label>Date (AAAA-MM-JJ)</label><input type="date" id="f-date" value="${state.eventDate}" ${locked ? 'disabled' : ''}></div>
       <div class="field"><label>Km</label><input type="number" inputmode="numeric" id="f-km" value="${escapeHtml(state.km)}" ${locked ? 'disabled' : ''}></div>
       <p class="warning" id="km-warning" hidden></p>
+      <p class="warning" id="ocr-km-info" hidden></p>
       <div class="field"><label>Litres</label><input type="number" step="0.01" inputmode="decimal" id="f-liters" value="${escapeHtml(state.liters)}" ${locked ? 'disabled' : ''}></div>
       <div class="field"><label>Prix unitaire (RWF/L)</label><input type="number" inputmode="numeric" id="f-unit-price" value="${escapeHtml(state.unitPrice)}" ${locked ? 'disabled' : ''}></div>
       <div class="field"><label>Montant (RWF)</label><input type="number" inputmode="numeric" id="f-amount" value="${escapeHtml(state.amount)}" ${locked ? 'disabled' : ''}></div>
@@ -722,6 +740,7 @@ async function renderFuelEventForm(editingId, presetVehicleId) {
 
     renderKmWarning();
     renderAmountWarning();
+    renderOcrKmInfo();
 
     if (locked) return; // aucun listener d'édition à attacher, tout est en lecture seule
 
@@ -743,6 +762,7 @@ async function renderFuelEventForm(editingId, presetVehicleId) {
     document.getElementById('f-km').addEventListener('input', (e) => {
       state.km = e.target.value;
       renderKmWarning();
+      renderOcrKmInfo();
     });
     document.getElementById('f-liters').addEventListener('input', (e) => {
       state.liters = e.target.value;
@@ -775,6 +795,14 @@ async function renderFuelEventForm(editingId, presetVehicleId) {
     const warning = vehicle ? checkKmConsistency(parseInt(state.km, 10), vehicle.current_km) : null;
     el.textContent = warning ?? '';
     el.hidden = !warning;
+  }
+
+  function renderOcrKmInfo() {
+    const el = document.getElementById('ocr-km-info');
+    if (!el) return;
+    const info = computeOcrKmInfo(state.km, ocrKm, ocrAnalyzedAt);
+    el.textContent = info ?? '';
+    el.hidden = !info;
   }
 
   function renderAmountWarning() {
@@ -881,6 +909,11 @@ async function renderLogbookEntryForm(editingId, presetVehicleId) {
   // de plein.
   const locked = !!(existing?.validated_at) && currentProfile?.role !== 'admin';
 
+  // OCR compteur (0009_ocr_odometer.sql) : lecture de référence, jamais modifiée
+  // depuis cet écran — juste affichée à titre indicatif si elle diverge du km saisi.
+  const ocrKm = existing?.ocr_km ?? null;
+  const ocrAnalyzedAt = existing?.ocr_analyzed_at ?? null;
+
   function currentVehicle() {
     return vehicles.find((v) => v.id === state.vehicleId) ?? null;
   }
@@ -910,6 +943,7 @@ async function renderLogbookEntryForm(editingId, presetVehicleId) {
       <div class="field"><label>Date (AAAA-MM-JJ)</label><input type="date" id="f-date" value="${state.eventDate}" ${locked ? 'disabled' : ''}></div>
       <div class="field"><label>Km</label><input type="number" inputmode="numeric" id="f-km" value="${escapeHtml(state.km)}" ${locked ? 'disabled' : ''}></div>
       <p class="warning" id="km-warning" hidden></p>
+      <p class="warning" id="ocr-km-info" hidden></p>
       <div class="field"><label>Commentaire (optionnel)</label><textarea id="f-comment" ${locked ? 'disabled' : ''}>${escapeHtml(state.comment)}</textarea></div>
 
       ${
@@ -937,6 +971,7 @@ async function renderLogbookEntryForm(editingId, presetVehicleId) {
 
     renderKmWarning();
     renderCloseKmWarning();
+    renderOcrKmInfo();
 
     if (locked) return;
 
@@ -959,6 +994,7 @@ async function renderLogbookEntryForm(editingId, presetVehicleId) {
       state.km = e.target.value;
       renderKmWarning();
       renderCloseKmWarning();
+      renderOcrKmInfo();
     });
     document.getElementById('f-comment').addEventListener('input', (e) => (state.comment = e.target.value));
     document.getElementById('f-close-km')?.addEventListener('input', (e) => {
@@ -984,6 +1020,14 @@ async function renderLogbookEntryForm(editingId, presetVehicleId) {
     const warning = vehicle ? checkKmConsistency(parseInt(state.km, 10), vehicle.current_km) : null;
     el.textContent = warning ?? '';
     el.hidden = !warning;
+  }
+
+  function renderOcrKmInfo() {
+    const el = document.getElementById('ocr-km-info');
+    if (!el) return;
+    const info = computeOcrKmInfo(state.km, ocrKm, ocrAnalyzedAt);
+    el.textContent = info ?? '';
+    el.hidden = !info;
   }
 
   function renderCloseKmWarning() {
@@ -1176,9 +1220,12 @@ async function renderDriverForm() {
 // - Zone 2 (indicateurs, ex-#/dashboard) : re-rendue seule (#dashboard-zone) sur
 //   changement de vue/métrique, pour ne jamais perdre les cases cochées de la zone 1.
 
-function validationThumbsHtml(photos) {
-  if (photos.length === 0) return '<span class="empty-text">—</span>';
-  return `<div class="validation-thumbs">${photos.map((p) => `<img class="validation-thumb-sm" src="${p.signedUrl}" alt="${escapeHtml(p.type)}">`).join('')}</div>`;
+// Cliquable : renvoie vers l'écran d'édition existant du plein/relevé, pour
+// comparer facilement la lecture Claude Vision (affichée là-bas) au km saisi.
+function validationThumbsHtml(item) {
+  if (item.photos.length === 0) return '<span class="empty-text">—</span>';
+  const href = item.kind === 'fuel' ? `#/fuel-event/${item.id}` : `#/logbook-entry/${item.id}`;
+  return `<a class="validation-thumbs" href="${href}">${item.photos.map((p) => `<img class="validation-thumb-sm" src="${p.signedUrl}" alt="${escapeHtml(p.type)}">`).join('')}</a>`;
 }
 
 // ---------- OCR compteur (0009_ocr_odometer.sql) ----------
@@ -1218,7 +1265,7 @@ function validationPendingTableHtml(items) {
       <td class="ocr-km-cell">${ocrKmCellHtml(item)}</td>
       <td>${item.driverName ? escapeHtml(item.driverName) : '—'}</td>
       <td>
-        ${validationThumbsHtml(item.photos)}
+        ${validationThumbsHtml(item)}
         ${item.ocrPhotoStoragePath ? `<button class="btn btn-secondary btn-sm" data-action="analyze-ocr" data-kind="${item.kind}" data-id="${item.id}">Analyser</button>` : ''}
       </td>
     </tr>
@@ -1251,7 +1298,7 @@ function validationDoneTableHtml(items) {
       <td>${item.date}</td>
       <td>${item.km.toLocaleString('fr-FR')}</td>
       <td>${item.driverName ? escapeHtml(item.driverName) : '—'}</td>
-      <td>${validationThumbsHtml(item.photos)}</td>
+      <td>${validationThumbsHtml(item)}</td>
       <td>${item.photos.length > 0 ? `<button class="btn btn-destructive btn-sm" data-action="delete-photos" data-kind="${item.kind}" data-id="${item.id}">Supprimer les photos</button>` : ''}</td>
     </tr>
   `
