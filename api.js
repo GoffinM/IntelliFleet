@@ -382,6 +382,13 @@ async function mapValidationFuelRow(row) {
     driverName: row.drivers?.name ?? null,
     validatedAt: row.validated_at,
     photos,
+    // 0009_ocr_odometer.sql — storage_path BRUT (pas signé) de la photo compteur,
+    // nécessaire pour appeler analyze-odometer (qui signe lui-même côté serveur).
+    ocrPhotoStoragePath: row.photos?.find((p) => p.type === 'odometer')?.storage_path ?? null,
+    ocrKm: row.ocr_km ?? null,
+    ocrConfidence: row.ocr_confidence ?? null,
+    ocrRawText: row.ocr_raw_text ?? null,
+    ocrAnalyzedAt: row.ocr_analyzed_at ?? null,
   };
 }
 
@@ -402,6 +409,11 @@ async function mapValidationLogbookRow(row) {
     driverName: row.drivers?.name ?? null,
     validatedAt: row.validated_at,
     photos,
+    ocrPhotoStoragePath: row.photo_storage_path ?? null,
+    ocrKm: row.ocr_km ?? null,
+    ocrConfidence: row.ocr_confidence ?? null,
+    ocrRawText: row.ocr_raw_text ?? null,
+    ocrAnalyzedAt: row.ocr_analyzed_at ?? null,
   };
 }
 
@@ -551,4 +563,62 @@ export async function countUnvalidatedEntries() {
   if (fuelRes.error) throw fuelRes.error;
   if (logbookRes.error) throw logbookRes.error;
   return (fuelRes.count ?? 0) + (logbookRes.count ?? 0);
+}
+
+// ---------- OCR compteur (0009_ocr_odometer.sql) ----------
+
+/** Appelle l'Edge Function analyze-odometer (admin only côté fonction). Ne lève
+ *  jamais pour un échec HTTP de la fonction (403/404/502/...) — normalise
+ *  toujours en { km, confidence, raw_text, error }, error non-null indiquant un
+ *  échec technique (km reste alors null, jamais une valeur inventée). */
+export async function analyzeOdometerPhoto({ bucket, storagePath }) {
+  const { data, error } = await supabase.functions.invoke('analyze-odometer', {
+    body: { bucket, storagePath },
+  });
+  if (error) {
+    let message = error.message || String(error);
+    try {
+      const body = await error.context?.json?.();
+      if (body?.error) message = body.error;
+    } catch {
+      // corps non JSON ou déjà consommé — on garde le message générique
+    }
+    return { km: null, confidence: null, raw_text: message, error: message };
+  }
+  return {
+    km: data?.km ?? null,
+    confidence: data?.confidence ?? null,
+    raw_text: data?.raw_text ?? null,
+    error: null,
+  };
+}
+
+/** Enregistre un résultat OCR sur un plein. ocr_analyzed_at est TOUJOURS écrit
+ *  (même en cas d'échec, km null) pour ne pas ré-analyser en boucle à chaque
+ *  ouverture de l'écran. */
+export async function saveFuelEventOcrResult(id, result) {
+  const { error } = await supabase
+    .from('fuel_events')
+    .update({
+      ocr_km: result.km,
+      ocr_confidence: result.confidence,
+      ocr_raw_text: result.raw_text,
+      ocr_analyzed_at: new Date().toISOString(),
+    })
+    .eq('id', id);
+  if (error) throw error;
+}
+
+/** Même chose pour un relevé. */
+export async function saveLogbookEntryOcrResult(id, result) {
+  const { error } = await supabase
+    .from('logbook_entries')
+    .update({
+      ocr_km: result.km,
+      ocr_confidence: result.confidence,
+      ocr_raw_text: result.raw_text,
+      ocr_analyzed_at: new Date().toISOString(),
+    })
+    .eq('id', id);
+  if (error) throw error;
 }

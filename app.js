@@ -35,14 +35,35 @@ import {
   listMyOpenLogbookTrips,
   countMyOpenLogbookTrips,
   listOpenTripsOnVehicleByOthers,
+  analyzeOdometerPhoto,
+  saveFuelEventOcrResult,
+  saveLogbookEntryOcrResult,
 } from './api.js';
 import { buildScopeDashboard, groupVehiclesByFleetGroup, formatMonthLabel } from './dashboard.js';
 
 const ACTIVE_VEHICLE_KEY = 'intellifleet:active_vehicle_id';
 const AMOUNT_TOLERANCE_RATIO = 0.005; // 0.5 %
 const AMOUNT_TOLERANCE_FLOOR_RWF = 5;
+const OCR_KM_TOLERANCE = 20; // km, écart absolu toléré entre la lecture Claude Vision et le km saisi
+const OCR_CONCURRENCY = 2; // appels analyze-odometer simultanés max (pas 10 d'un coup)
 
 // ---------- Helpers génériques ----------
+
+/** Exécute worker(item) sur chaque élément de items, au plus `limit` en parallèle
+ *  à tout instant (jamais tout d'un coup). Chaque appel est indépendant : un
+ *  worker qui échoue n'arrête pas les autres tant que worker() gère ses propres
+ *  erreurs (voir autoOcrItem dans renderValidation). */
+async function runWithConcurrencyLimit(items, limit, worker) {
+  let nextIndex = 0;
+  async function runNext() {
+    const i = nextIndex++;
+    if (i >= items.length) return;
+    await worker(items[i]);
+    await runNext();
+  }
+  const workerCount = Math.min(limit, items.length);
+  await Promise.all(Array.from({ length: workerCount }, runNext));
+}
 
 function escapeHtml(value) {
   if (value === null || value === undefined) return '';
@@ -1160,19 +1181,46 @@ function validationThumbsHtml(photos) {
   return `<div class="validation-thumbs">${photos.map((p) => `<img class="validation-thumb-sm" src="${p.signedUrl}" alt="${escapeHtml(p.type)}">`).join('')}</div>`;
 }
 
+// ---------- OCR compteur (0009_ocr_odometer.sql) ----------
+
+function ocrWithinTolerance(item) {
+  return item.ocrKm != null && Math.abs(item.ocrKm - item.km) <= OCR_KM_TOLERANCE;
+}
+
+function ocrMismatch(item) {
+  return item.ocrKm != null && Math.abs(item.ocrKm - item.km) > OCR_KM_TOLERANCE;
+}
+
+/** Contenu de la cellule Km : la valeur saisie + un badge si Claude Vision a lu
+ *  un km trop éloigné (au-delà d'OCR_KM_TOLERANCE) — partagé entre le rendu
+ *  initial et la mise à jour d'une ligne après analyse (updateRowAfterOcr). */
+function ocrKmCellHtml(item) {
+  return `
+    ${item.km.toLocaleString('fr-FR')}
+    ${
+      ocrMismatch(item)
+        ? `<div class="incomplete-tag">Claude Vision : ${item.ocrKm.toLocaleString('fr-FR')} km, saisi : ${item.km.toLocaleString('fr-FR')} km — à vérifier</div>`
+        : ''
+    }
+  `;
+}
+
 function validationPendingTableHtml(items) {
   if (items.length === 0) return '<p class="empty-text">Rien à valider.</p>';
   const rows = items
     .map(
       (item) => `
-    <tr>
-      <td><input type="checkbox" class="validation-checkbox" data-kind="${item.kind}" data-id="${item.id}"></td>
+    <tr data-row-kind="${item.kind}" data-row-id="${item.id}">
+      <td><input type="checkbox" class="validation-checkbox" data-kind="${item.kind}" data-id="${item.id}" ${ocrWithinTolerance(item) ? 'checked' : ''}></td>
       <td>${item.kind === 'fuel' ? 'Plein' : 'Relevé'}</td>
       <td>${escapeHtml(item.vehicleName)}</td>
       <td>${item.date}</td>
-      <td>${item.km.toLocaleString('fr-FR')}</td>
+      <td class="ocr-km-cell">${ocrKmCellHtml(item)}</td>
       <td>${item.driverName ? escapeHtml(item.driverName) : '—'}</td>
-      <td>${validationThumbsHtml(item.photos)}</td>
+      <td>
+        ${validationThumbsHtml(item.photos)}
+        ${item.ocrPhotoStoragePath ? `<button class="btn btn-secondary btn-sm" data-action="analyze-ocr" data-kind="${item.kind}" data-id="${item.id}">Analyser</button>` : ''}
+      </td>
     </tr>
   `
     )
@@ -1374,13 +1422,20 @@ async function renderValidation() {
     btn.disabled = checked === 0;
   }
 
+  // dataset.manual marque une case déjà touchée par l'admin (directement ou via
+  // "Tout sélectionner") — une mise à jour OCR qui arrive après (auto ou via le
+  // bouton "Analyser") ne doit alors plus jamais toucher checkbox.checked.
   document.querySelectorAll('.validation-checkbox').forEach((cb) => {
-    cb.addEventListener('change', updateValidateSelectedButton);
+    cb.addEventListener('change', () => {
+      cb.dataset.manual = 'true';
+      updateValidateSelectedButton();
+    });
   });
 
   document.getElementById('select-all-pending')?.addEventListener('change', (e) => {
     document.querySelectorAll('.validation-checkbox').forEach((cb) => {
       cb.checked = e.target.checked;
+      cb.dataset.manual = 'true';
     });
     updateValidateSelectedButton();
   });
@@ -1417,6 +1472,81 @@ async function renderValidation() {
         btn.disabled = false;
       }
     });
+  });
+
+  // ---- OCR compteur (0009_ocr_odometer.sql) : auto au chargement + bouton
+  // "Analyser" manuel, même logique sous-jacente ----
+
+  /** Met à jour la ligne DOM d'un item après une analyse (auto ou manuelle) :
+   *  jamais la case à cocher si l'admin l'a déjà touchée (dataset.manual). */
+  function updateRowAfterOcr(item) {
+    const row = document.querySelector(`tr[data-row-kind="${item.kind}"][data-row-id="${item.id}"]`);
+    if (!row) return; // ligne disparue entretemps (ex. validée puis écran rechargé)
+
+    const kmCell = row.querySelector('.ocr-km-cell');
+    if (kmCell) kmCell.innerHTML = ocrKmCellHtml(item);
+
+    const checkbox = row.querySelector('.validation-checkbox');
+    if (checkbox && checkbox.dataset.manual !== 'true') {
+      checkbox.checked = ocrWithinTolerance(item);
+      updateValidateSelectedButton();
+    }
+
+    const analyzeBtn = row.querySelector('[data-action="analyze-ocr"]');
+    if (analyzeBtn) {
+      analyzeBtn.disabled = false;
+      analyzeBtn.textContent = 'Analyser';
+    }
+  }
+
+  /** Analyse un item et enregistre le résultat. Toujours suivi d'une mise à jour
+   *  de la ligne (finally), y compris si l'appel échoue, pour réactiver le
+   *  bouton "Analyser" — l'erreur elle-même continue de se propager à l'appelant
+   *  (auto vs manuel décident chacun quoi en faire). */
+  async function runOcrForItem(item) {
+    try {
+      const bucket = item.kind === 'fuel' ? 'fuel-photos' : 'logbook-photos';
+      const result = await analyzeOdometerPhoto({ bucket, storagePath: item.ocrPhotoStoragePath });
+      if (item.kind === 'fuel') await saveFuelEventOcrResult(item.id, result);
+      else await saveLogbookEntryOcrResult(item.id, result);
+      item.ocrKm = result.km;
+      item.ocrConfidence = result.confidence;
+      item.ocrRawText = result.raw_text;
+      item.ocrAnalyzedAt = new Date().toISOString();
+    } finally {
+      updateRowAfterOcr(item);
+    }
+  }
+
+  document.querySelectorAll('[data-action="analyze-ocr"]').forEach((btn) => {
+    btn.addEventListener('click', async () => {
+      const item = pending.find((p) => p.kind === btn.dataset.kind && p.id === btn.dataset.id);
+      if (!item) return;
+      errorEl.hidden = true;
+      btn.disabled = true;
+      btn.textContent = 'Analyse…';
+      try {
+        await runOcrForItem(item);
+      } catch (e) {
+        errorEl.textContent = e.message || String(e);
+        errorEl.hidden = false;
+      }
+    });
+  });
+
+  // Auto, en tâche de fond : jamais plus de OCR_CONCURRENCY appels à la fois, et
+  // la table est déjà affichée (pas d'attente) — chaque ligne se met à jour à son
+  // tour à mesure que les résultats arrivent. Erreurs juste logguées (pas
+  // d'interruption pour une amélioration silencieuse) : analyzeOdometerPhoto ne
+  // lève déjà pas pour un échec HTTP de la fonction, seule une panne de
+  // sauvegarde DB pourrait remonter ici.
+  const needingAutoOcr = pending.filter((item) => item.ocrPhotoStoragePath && !item.ocrAnalyzedAt);
+  runWithConcurrencyLimit(needingAutoOcr, OCR_CONCURRENCY, async (item) => {
+    try {
+      await runOcrForItem(item);
+    } catch (e) {
+      console.error('[IntelliFleet] OCR auto', item.kind, item.id, e);
+    }
   });
 
   // ---- Zone 2 : indicateurs (ex-#/dashboard), re-rendue seule pour ne jamais
