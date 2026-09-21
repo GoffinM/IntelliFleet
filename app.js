@@ -145,7 +145,7 @@ let lastRenderedKey;
 // onAuthStateChange plus bas.
 let currentProfile;
 
-const ADMIN_ONLY_PAGES = ['vehicle-form', 'driver-form', 'validation', 'dashboard'];
+const ADMIN_ONLY_PAGES = ['vehicle-form', 'driver-form', 'validation'];
 
 async function route() {
   const {
@@ -188,7 +188,6 @@ async function route() {
     if (page === 'vehicle-form') return await renderVehicleForm();
     if (page === 'driver-form') return await renderDriverForm();
     if (page === 'validation') return await renderValidation();
-    if (page === 'dashboard') return await renderDashboard();
     return await renderHome();
   } catch (e) {
     setError(e);
@@ -300,7 +299,6 @@ async function renderHome() {
           <a href="#/vehicle-form">+ Véhicule</a>
           <a href="#/driver-form">+ Chauffeur</a>
           <a href="#/validation">Validation${pendingCount > 0 ? ` (${pendingCount})` : ''}</a>
-          <a href="#/dashboard">Tableau de bord</a>
         </div>
         `
             : ''
@@ -1000,91 +998,78 @@ async function renderDriverForm() {
   });
 }
 
-// ---------- Écran : validation (admin only) ----------
+// ---------- Écran : validation + tableau de bord (admin only) ----------
+//
+// Un seul écran, deux zones (#/validation) :
+// - Zone 1 (actions, à valider / validées récemment) : TOUJOURS fleet-wide, jamais
+//   filtrée par le sélecteur de la zone 2 — c'est une file de travail, l'admin doit
+//   voir tout ce qui attend une action peu importe la vue choisie pour les indicateurs.
+// - Zone 2 (indicateurs, ex-#/dashboard) : re-rendue seule (#dashboard-zone) sur
+//   changement de vue/métrique, pour ne jamais perdre les cases cochées de la zone 1.
 
-function validationRowHtml(item) {
-  const kindLabel = item.kind === 'fuel' ? 'Plein' : 'Relevé';
-  const isValidated = !!item.validatedAt;
-  const thumbs = item.photos.map((p) => `<img class="validation-thumb" src="${p.signedUrl}" alt="${escapeHtml(p.type)}">`).join('');
+function validationThumbsHtml(photos) {
+  if (photos.length === 0) return '<span class="empty-text">—</span>';
+  return `<div class="validation-thumbs">${photos.map((p) => `<img class="validation-thumb-sm" src="${p.signedUrl}" alt="${escapeHtml(p.type)}">`).join('')}</div>`;
+}
+
+function validationPendingTableHtml(items) {
+  if (items.length === 0) return '<p class="empty-text">Rien à valider.</p>';
+  const rows = items
+    .map(
+      (item) => `
+    <tr>
+      <td><input type="checkbox" class="validation-checkbox" data-kind="${item.kind}" data-id="${item.id}"></td>
+      <td>${item.kind === 'fuel' ? 'Plein' : 'Relevé'}</td>
+      <td>${escapeHtml(item.vehicleName)}</td>
+      <td>${item.date}</td>
+      <td>${item.km.toLocaleString('fr-FR')}</td>
+      <td>${item.driverName ? escapeHtml(item.driverName) : '—'}</td>
+      <td>${validationThumbsHtml(item.photos)}</td>
+    </tr>
+  `
+    )
+    .join('');
   return `
-    <div class="card">
-      <div class="timeline-header">
-        <p class="card-title">${kindLabel} · ${escapeHtml(item.vehicleName)}</p>
-        <span class="badge ${isValidated ? 'badge-validated' : 'badge-pending'}">${isValidated ? 'Validé' : 'Non validé'}</span>
-      </div>
-      <p class="card-subtitle">${item.date} · ${item.km.toLocaleString('fr-FR')} km${item.driverName ? ` · ${escapeHtml(item.driverName)}` : ''}</p>
-      ${item.kind === 'fuel' ? `<p class="timeline-line">${item.liters} L · ${item.amount.toLocaleString('fr-FR')} RWF</p>` : ''}
-      ${thumbs ? `<div class="validation-thumbs">${thumbs}</div>` : '<p class="empty-text">Aucune photo.</p>'}
-      <div class="btn-row">
-        ${!isValidated ? `<button class="btn btn-primary" data-action="validate" data-kind="${item.kind}" data-id="${item.id}">Valider</button>` : ''}
-        ${isValidated && item.photos.length > 0 ? `<button class="btn btn-destructive" data-action="delete-photos" data-kind="${item.kind}" data-id="${item.id}">Supprimer les photos</button>` : ''}
-      </div>
+    <div style="overflow-x:auto">
+      <table class="data-table validation-table">
+        <thead>
+          <tr>
+            <th><input type="checkbox" id="select-all-pending"></th>
+            <th>Type</th><th>Véhicule</th><th>Date</th><th>Km</th><th>Chauffeur</th><th>Photos</th>
+          </tr>
+        </thead>
+        <tbody>${rows}</tbody>
+      </table>
     </div>
   `;
 }
 
-async function renderValidation() {
-  setLoading();
-  const [pendingFuel, pendingLogbook, doneFuel, doneLogbook] = await Promise.all([
-    listUnvalidatedFuelEvents(),
-    listUnvalidatedLogbookEntries(),
-    listRecentlyValidatedFuelEvents(),
-    listRecentlyValidatedLogbookEntries(),
-  ]);
-  const byDateDesc = (a, b) => (a.date !== b.date ? (a.date < b.date ? 1 : -1) : a.createdAt < b.createdAt ? 1 : -1);
-  const pending = [...pendingFuel, ...pendingLogbook].sort(byDateDesc);
-  const done = [...doneFuel, ...doneLogbook].sort(byDateDesc);
-
-  setContent(`
-    ${topBarHtml('Validation')}
-    <div class="screen-wide">
-    <p class="error" id="validation-error" hidden></p>
-
-    <div class="section-label">À valider (${pending.length})</div>
-    ${pending.length === 0 ? '<p class="empty-text">Rien à valider.</p>' : `<div class="card-grid">${pending.map(validationRowHtml).join('')}</div>`}
-
-    <div class="section-label">Validées récemment</div>
-    ${done.length === 0 ? '<p class="empty-text">Aucune entrée validée récemment.</p>' : `<div class="card-grid">${done.map(validationRowHtml).join('')}</div>`}
+function validationDoneTableHtml(items) {
+  if (items.length === 0) return '<p class="empty-text">Aucune entrée validée récemment.</p>';
+  const rows = items
+    .map(
+      (item) => `
+    <tr>
+      <td>${item.kind === 'fuel' ? 'Plein' : 'Relevé'}</td>
+      <td>${escapeHtml(item.vehicleName)}</td>
+      <td>${item.date}</td>
+      <td>${item.km.toLocaleString('fr-FR')}</td>
+      <td>${item.driverName ? escapeHtml(item.driverName) : '—'}</td>
+      <td>${validationThumbsHtml(item.photos)}</td>
+      <td>${item.photos.length > 0 ? `<button class="btn btn-destructive btn-sm" data-action="delete-photos" data-kind="${item.kind}" data-id="${item.id}">Supprimer les photos</button>` : ''}</td>
+    </tr>
+  `
+    )
+    .join('');
+  return `
+    <div style="overflow-x:auto">
+      <table class="data-table validation-table">
+        <thead><tr><th>Type</th><th>Véhicule</th><th>Date</th><th>Km</th><th>Chauffeur</th><th>Photos</th><th></th></tr></thead>
+        <tbody>${rows}</tbody>
+      </table>
     </div>
-  `);
-
-  const errorEl = document.getElementById('validation-error');
-
-  document.querySelectorAll('[data-action="validate"]').forEach((btn) => {
-    btn.addEventListener('click', async () => {
-      errorEl.hidden = true;
-      btn.disabled = true;
-      try {
-        if (btn.dataset.kind === 'fuel') await validateFuelEvent(btn.dataset.id);
-        else await validateLogbookEntry(btn.dataset.id);
-        await renderValidation();
-      } catch (e) {
-        errorEl.textContent = e.message || String(e);
-        errorEl.hidden = false;
-        btn.disabled = false;
-      }
-    });
-  });
-
-  document.querySelectorAll('[data-action="delete-photos"]').forEach((btn) => {
-    btn.addEventListener('click', async () => {
-      if (!confirm('Supprimer les photos de cette entrée ? Cette action est irréversible.')) return;
-      errorEl.hidden = true;
-      btn.disabled = true;
-      try {
-        if (btn.dataset.kind === 'fuel') await deleteFuelEventPhotos(btn.dataset.id);
-        else await deleteLogbookEntryPhoto(btn.dataset.id);
-        await renderValidation();
-      } catch (e) {
-        errorEl.textContent = e.message || String(e);
-        errorEl.hidden = false;
-        btn.disabled = false;
-      }
-    });
-  });
+  `;
 }
-
-// ---------- Écran : tableau de bord (admin only) ----------
 
 const DASHBOARD_VIEWS = [
   { key: 'vehicle', label: 'Par véhicule' },
@@ -1184,13 +1169,20 @@ function dashboardDriverTableHtml(drivers) {
   `;
 }
 
-async function renderDashboard() {
+async function renderValidation() {
   setLoading();
-  const [vehicles, fuelEvents, logbookEntries] = await Promise.all([
+  const [pendingFuel, pendingLogbook, doneFuel, doneLogbook, vehicles, validatedFuelAll, validatedLogbookAll] = await Promise.all([
+    listUnvalidatedFuelEvents(),
+    listUnvalidatedLogbookEntries(),
+    listRecentlyValidatedFuelEvents(),
+    listRecentlyValidatedLogbookEntries(),
     listVehicles(),
     listValidatedFuelEventsAll(),
     listValidatedLogbookEntriesAll(),
   ]);
+  const byDateDesc = (a, b) => (a.date !== b.date ? (a.date < b.date ? 1 : -1) : a.createdAt < b.createdAt ? 1 : -1);
+  const pending = [...pendingFuel, ...pendingLogbook].sort(byDateDesc);
+  const done = [...doneFuel, ...doneLogbook].sort(byDateDesc);
   const groups = groupVehiclesByFleetGroup(vehicles);
 
   if (!dashboardState) {
@@ -1202,6 +1194,86 @@ async function renderDashboard() {
     };
   }
 
+  setContent(`
+    ${topBarHtml('Validation')}
+    <div class="screen-dashboard">
+    <p class="error" id="validation-error" hidden></p>
+
+    <div class="section-label">À valider (${pending.length})</div>
+    <div class="btn-row">
+      <button class="btn btn-primary" id="btn-validate-selected" disabled>Valider la sélection (0)</button>
+    </div>
+    ${validationPendingTableHtml(pending)}
+
+    <div class="section-label">Validées récemment</div>
+    ${validationDoneTableHtml(done)}
+
+    <div class="divider"></div>
+    <div class="section-label">Vue d'ensemble</div>
+    <div id="dashboard-zone"></div>
+    </div>
+  `);
+
+  const errorEl = document.getElementById('validation-error');
+
+  // ---- Zone 1 : actions (fleet-wide, jamais filtrée par la zone 2) ----
+
+  function updateValidateSelectedButton() {
+    const btn = document.getElementById('btn-validate-selected');
+    if (!btn) return;
+    const checked = document.querySelectorAll('.validation-checkbox:checked').length;
+    btn.textContent = `Valider la sélection (${checked})`;
+    btn.disabled = checked === 0;
+  }
+
+  document.querySelectorAll('.validation-checkbox').forEach((cb) => {
+    cb.addEventListener('change', updateValidateSelectedButton);
+  });
+
+  document.getElementById('select-all-pending')?.addEventListener('change', (e) => {
+    document.querySelectorAll('.validation-checkbox').forEach((cb) => {
+      cb.checked = e.target.checked;
+    });
+    updateValidateSelectedButton();
+  });
+
+  document.getElementById('btn-validate-selected')?.addEventListener('click', async (e) => {
+    const btn = e.currentTarget;
+    const checked = [...document.querySelectorAll('.validation-checkbox:checked')];
+    errorEl.hidden = true;
+    btn.disabled = true;
+    try {
+      await Promise.all(
+        checked.map((cb) => (cb.dataset.kind === 'fuel' ? validateFuelEvent(cb.dataset.id) : validateLogbookEntry(cb.dataset.id)))
+      );
+      await renderValidation();
+    } catch (err) {
+      errorEl.textContent = err.message || String(err);
+      errorEl.hidden = false;
+      btn.disabled = false;
+    }
+  });
+
+  document.querySelectorAll('[data-action="delete-photos"]').forEach((btn) => {
+    btn.addEventListener('click', async () => {
+      if (!confirm('Supprimer les photos de cette entrée ? Cette action est irréversible.')) return;
+      errorEl.hidden = true;
+      btn.disabled = true;
+      try {
+        if (btn.dataset.kind === 'fuel') await deleteFuelEventPhotos(btn.dataset.id);
+        else await deleteLogbookEntryPhoto(btn.dataset.id);
+        await renderValidation();
+      } catch (e) {
+        errorEl.textContent = e.message || String(e);
+        errorEl.hidden = false;
+        btn.disabled = false;
+      }
+    });
+  });
+
+  // ---- Zone 2 : indicateurs (ex-#/dashboard), re-rendue seule pour ne jamais
+  // toucher aux cases cochées de la zone 1 ----
+
   function vehicleIdsForScope() {
     if (dashboardState.view === 'vehicle') return dashboardState.vehicleId ? [dashboardState.vehicleId] : [];
     if (dashboardState.view === 'group') {
@@ -1211,13 +1283,23 @@ async function renderDashboard() {
     return vehicles.map((v) => v.id);
   }
 
-  function draw() {
-    const { monthly, drivers } = buildScopeDashboard(vehicleIdsForScope(), fuelEvents, logbookEntries);
+  function drawDashboardZone() {
+    const scopeIds = vehicleIdsForScope();
+    const scopeSet = new Set(scopeIds);
+    // Compte scopé à la vue sélectionnée : donne une idée de la fiabilité des
+    // chiffres du tableau juste en dessous (contrairement à la zone 1, qui reste
+    // fleet-wide).
+    const validatedCount =
+      validatedFuelAll.filter((e) => scopeSet.has(e.vehicle_id)).length +
+      validatedLogbookAll.filter((e) => scopeSet.has(e.vehicle_id)).length;
+    const pendingScoped = pending.filter((p) => scopeSet.has(p.vehicleId)).length;
+    const { monthly, drivers } = buildScopeDashboard(scopeIds, validatedFuelAll, validatedLogbookAll);
     const monthlyAsc = [...monthly].reverse();
 
-    setContent(`
-      ${topBarHtml('Tableau de bord')}
-      <div class="screen-dashboard">
+    const zone = document.getElementById('dashboard-zone');
+    zone.innerHTML = `
+      <p class="dashboard-scope-banner">${validatedCount.toLocaleString('fr-FR')} entrées validées · ${pendingScoped.toLocaleString('fr-FR')} en attente de validation</p>
+
       <div class="dashboard-layout">
         <div class="dashboard-controls">
           <div class="chip-row">
@@ -1261,36 +1343,35 @@ async function renderDashboard() {
           ${dashboardDriverTableHtml(drivers)}
         </div>
       </div>
-      </div>
-    `);
+    `;
 
-    document.querySelectorAll('[data-view]').forEach((btn) => {
+    zone.querySelectorAll('[data-view]').forEach((btn) => {
       btn.addEventListener('click', () => {
         dashboardState.view = btn.dataset.view;
-        draw();
+        drawDashboardZone();
       });
     });
-    document.querySelectorAll('[data-vehicle]').forEach((btn) => {
+    zone.querySelectorAll('[data-vehicle]').forEach((btn) => {
       btn.addEventListener('click', () => {
         dashboardState.vehicleId = btn.dataset.vehicle;
-        draw();
+        drawDashboardZone();
       });
     });
-    document.querySelectorAll('[data-group]').forEach((btn) => {
+    zone.querySelectorAll('[data-group]').forEach((btn) => {
       btn.addEventListener('click', () => {
         dashboardState.group = btn.dataset.group || null;
-        draw();
+        drawDashboardZone();
       });
     });
-    document.querySelectorAll('[data-metric]').forEach((btn) => {
+    zone.querySelectorAll('[data-metric]').forEach((btn) => {
       btn.addEventListener('click', () => {
         dashboardState.metric = btn.dataset.metric;
-        draw();
+        drawDashboardZone();
       });
     });
   }
 
-  draw();
+  drawDashboardZone();
 }
 
 // ---------- Service worker : désactivé pendant la phase de debugging actif ----------

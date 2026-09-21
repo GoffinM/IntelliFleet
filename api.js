@@ -312,6 +312,7 @@ async function mapValidationFuelRow(row) {
   return {
     kind: 'fuel',
     id: row.id,
+    vehicleId: row.vehicle_id,
     date: row.event_date,
     createdAt: row.created_at,
     km: row.km,
@@ -331,6 +332,7 @@ async function mapValidationLogbookRow(row) {
   return {
     kind: 'logbook',
     id: row.id,
+    vehicleId: row.vehicle_id,
     date: row.event_date,
     createdAt: row.created_at,
     km: row.km,
