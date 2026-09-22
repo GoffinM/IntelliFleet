@@ -1,7 +1,7 @@
 // Couche data Supabase — port direct des fichiers src/features/*/api.ts de la version
 // React Native, adapté au File/Blob natif du navigateur (input file) au lieu de
 // fetch(uri).arrayBuffer() sur un chemin local RN.
-import { supabase } from './supabase-client.js?v=202609212228';
+import { supabase } from './supabase-client.js?v=202609220817';
 
 export const PHOTO_TYPES = [
   { type: 'vehicle_plate', label: 'Véhicule + plaque' },
@@ -49,6 +49,20 @@ export async function createDriver(input) {
   const { data, error } = await supabase.from('drivers').insert({ name: input.name }).select().single();
   if (error) throw error;
   return data;
+}
+
+// ---------- Signalement de bug (0010_bug_reports.sql) ----------
+
+/** owner_id est posé côté DB (default auth.uid()), pas besoin de le passer ici. */
+export async function createBugReport(input) {
+  const { error } = await supabase.from('bug_reports').insert({
+    description: input.description,
+    screen_hash: input.screenHash,
+    role: input.role,
+    browser_info: input.browserInfo,
+    app_version: input.appVersion,
+  });
+  if (error) throw error;
 }
 
 // ---------- Profils (0005_fleet_multi_user.sql) ----------

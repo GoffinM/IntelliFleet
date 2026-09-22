@@ -79,6 +79,15 @@ h1 {
   margin: 0;
 }
 
+.top-bar-report {
+  color: var(--text-muted);
+  font-weight: 600;
+  font-size: 12px;
+  text-decoration: none;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
 .section-label {
   font-size: 13px;
   font-weight: 600;
@@ -171,6 +180,11 @@ h1 {
 
 .error {
   color: var(--red);
+  font-size: 14px;
+}
+
+.success {
+  color: #15803d;
   font-size: 14px;
 }
 

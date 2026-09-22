@@ -1,6 +1,6 @@
 // IntelliFleet PWA — routing (hash) + 4 écrans, vanilla JS, sans framework.
-import { supabase } from './supabase-client.js?v=202609212228';
-import { checkKmConsistency } from './km-consistency.js?v=202609212228';
+import { supabase } from './supabase-client.js?v=202609220817';
+import { checkKmConsistency } from './km-consistency.js?v=202609220817';
 import {
   PHOTO_TYPES,
   listVehicles,
@@ -38,8 +38,9 @@ import {
   analyzeOdometerPhoto,
   saveFuelEventOcrResult,
   saveLogbookEntryOcrResult,
-} from './api.js?v=202609212228';
-import { buildScopeDashboard, groupVehiclesByFleetGroup, formatMonthLabel } from './dashboard.js?v=202609212228';
+  createBugReport,
+} from './api.js?v=202609220817';
+import { buildScopeDashboard, groupVehiclesByFleetGroup, formatMonthLabel } from './dashboard.js?v=202609220817';
 
 const ACTIVE_VEHICLE_KEY = 'intellifleet:active_vehicle_id';
 const AMOUNT_TOLERANCE_RATIO = 0.005; // 0.5 %
@@ -192,10 +193,20 @@ function vehicleChipsHtml(vehicles, activeId) {
 // devenir une "carte" avec son propre padding/radius sur desktop, ce qui casserait
 // visuellement une barre sticky posée à l'intérieur.
 function topBarHtml(title, { showBack = true } = {}) {
+  // Capture du hash courant AU RENDU (pas au clic) : topBarHtml() est rappelée par
+  // chaque renderXXX() à chaque changement de route, donc location.hash ici est
+  // toujours exactement le hash de l'écran affiché — pas besoin d'un gestionnaire de
+  // clic séparé pour "capturer" quoi que ce soit. Pas de lien vers soi-même depuis
+  // l'écran de signalement lui-même (ça n'aurait pas de sens).
+  const currentHash = location.hash.slice(1) || '/';
+  const reportLink = currentHash.startsWith('/report-bug')
+    ? ''
+    : `<a href="#/report-bug?from=${encodeURIComponent(currentHash)}" class="top-bar-report">Signaler un problème</a>`;
   return `
     <div class="top-bar">
       ${showBack ? '<a href="#/" class="top-bar-back">← Accueil</a>' : ''}
       <h1 class="top-bar-title">${escapeHtml(title)}</h1>
+      ${reportLink}
     </div>
   `;
 }
@@ -274,6 +285,7 @@ async function route() {
     if (page === 'driver-form') return await renderDriverForm();
     if (page === 'validation') return await renderValidation();
     if (page === 'close-trip') return await renderCloseTrip();
+    if (page === 'report-bug') return await renderReportBug(query.get('from'));
     return await renderHome();
   } catch (e) {
     setError(e);
@@ -1261,6 +1273,73 @@ async function renderLogbookEntryForm(editingId, presetVehicleId) {
   }
 
   renderForm();
+}
+
+// ---------- Écran : signaler un problème ----------
+
+// Lit le numéro de version depuis le tag <script> chargeant app.js (même paramètre
+// ?v=... que celui géré par scripts/bump-cache-version.mjs) — aucun système de
+// versionnage séparé à entretenir en parallèle.
+function currentAppVersion() {
+  const src = document.querySelector('script[src*="app.js"]')?.src ?? '';
+  const match = src.match(/[?&]v=([^&]+)/);
+  return match ? match[1] : null;
+}
+
+async function renderReportBug(fromHash) {
+  // fromHash vient de query.get('from') donc déjà décodé ; c'est le hash (sans '#')
+  // de l'écran d'où l'utilisateur est venu, capturé par topBarHtml() au moment où
+  // il a cliqué sur "Signaler un problème" — pas '/report-bug' lui-même.
+  const originHash = fromHash ? `#${fromHash}` : '#/';
+
+  setContent(`
+    ${topBarHtml('Signaler un problème')}
+    <div class="screen-narrow">
+    <div class="field">
+      <label>Qu'est-ce qui s'est passé ?</label>
+      <textarea id="f-description" rows="6" placeholder="Décris le problème, même brièvement — le contexte technique est capturé automatiquement."></textarea>
+    </div>
+    <p class="error" id="form-error" hidden></p>
+    <button class="btn btn-primary" id="btn-send">Envoyer</button>
+    </div>
+  `);
+
+  const errorEl = document.getElementById('form-error');
+  const sendBtn = document.getElementById('btn-send');
+
+  sendBtn.addEventListener('click', async () => {
+    errorEl.hidden = true;
+    const description = document.getElementById('f-description').value.trim();
+    if (!description) {
+      errorEl.textContent = 'Décris le problème avant d’envoyer.';
+      errorEl.hidden = false;
+      return;
+    }
+
+    sendBtn.disabled = true;
+    sendBtn.textContent = 'Envoi…';
+    try {
+      await createBugReport({
+        description,
+        screenHash: originHash.slice(1),
+        role: currentProfile?.role ?? null,
+        browserInfo: `${navigator.userAgent} | ${window.innerWidth}x${window.innerHeight}`,
+        appVersion: currentAppVersion(),
+      });
+      setContent(`
+        ${topBarHtml('Signaler un problème')}
+        <div class="screen-narrow">
+        <p class="success">Merci, ton signalement a bien été envoyé.</p>
+        <a href="${originHash}" class="top-bar-back">← Retour à l'écran précédent</a>
+        </div>
+      `);
+    } catch (e) {
+      errorEl.textContent = e.message || String(e);
+      errorEl.hidden = false;
+      sendBtn.disabled = false;
+      sendBtn.textContent = 'Envoyer';
+    }
+  });
 }
 
 // ---------- Écran : nouveau véhicule (admin only) ----------
