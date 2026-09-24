@@ -178,6 +178,12 @@ h1 {
   margin: -6px 0 8px;
 }
 
+.computed-info {
+  color: var(--text-muted);
+  font-size: 13px;
+  margin: -6px 0 12px;
+}
+
 .error {
   color: var(--red);
   font-size: 14px;

@@ -1,6 +1,6 @@
 // IntelliFleet PWA — routing (hash) + 4 écrans, vanilla JS, sans framework.
-import { supabase } from './supabase-client.js?v=202609241906';
-import { checkKmConsistency } from './km-consistency.js?v=202609241906';
+import { supabase } from './supabase-client.js?v=202609241919';
+import { checkKmConsistency } from './km-consistency.js?v=202609241919';
 import {
   PHOTO_TYPES,
   listVehicles,
@@ -39,12 +39,10 @@ import {
   saveFuelEventOcrResult,
   saveLogbookEntryOcrResult,
   createBugReport,
-} from './api.js?v=202609241906';
-import { buildScopeDashboard, groupVehiclesByFleetGroup, formatMonthLabel } from './dashboard.js?v=202609241906';
+} from './api.js?v=202609241919';
+import { buildScopeDashboard, groupVehiclesByFleetGroup, formatMonthLabel } from './dashboard.js?v=202609241919';
 
 const ACTIVE_VEHICLE_KEY = 'intellifleet:active_vehicle_id';
-const AMOUNT_TOLERANCE_RATIO = 0.005; // 0.5 %
-const AMOUNT_TOLERANCE_FLOOR_RWF = 5;
 const OCR_KM_TOLERANCE = 20; // km, écart absolu toléré entre la lecture Claude Vision et le km saisi
 const OCR_CONCURRENCY = 2; // appels analyze-odometer simultanés max (pas 10 d'un coup)
 
@@ -167,18 +165,17 @@ function setActiveVehicleId(id) {
   localStorage.setItem(ACTIVE_VEHICLE_KEY, id);
 }
 
-function computeAmountWarning(liters, unitPrice, amount) {
+/**
+ * Prix unitaire (RWF/L, entier) dérivé du montant et des litres — plus jamais saisi
+ * à la main : seuls litres et montant figurent sur la pompe/le ticket. null si l'un
+ * des deux manque ou si le résultat ne serait pas un prix valide (unit_price > 0).
+ */
+function computeUnitPrice(liters, amount) {
   const l = parseFloat(liters);
-  const p = parseFloat(unitPrice);
-  const a = parseFloat(amount);
-  if (!l || !p || !a) return null;
-  const expected = l * p;
-  const diff = Math.abs(a - expected);
-  const threshold = Math.max(AMOUNT_TOLERANCE_FLOOR_RWF, expected * AMOUNT_TOLERANCE_RATIO);
-  if (diff > threshold) {
-    return `Montant inhabituel : litres × prix ≈ ${Math.round(expected).toLocaleString('fr-FR')} RWF, saisi ${Math.round(a).toLocaleString('fr-FR')} RWF.`;
-  }
-  return null;
+  const a = parseInt(amount, 10);
+  if (!(l > 0) || !(a > 0)) return null;
+  const price = Math.round(a / l);
+  return price >= 1 ? price : null;
 }
 
 function vehicleChipsHtml(vehicles, activeId) {
@@ -765,7 +762,6 @@ async function renderFuelEventForm(editingId, presetVehicleId) {
     eventDate: existing ? existing.event_date : todayIso(),
     km: existing ? String(existing.km) : '',
     liters: existing ? String(existing.liters) : '',
-    unitPrice: existing ? String(existing.unit_price) : '',
     amount: existing ? String(existing.amount) : '',
     station: existing ? (existing.station ?? '') : '',
     notes: existing ? (existing.notes ?? '') : '',
@@ -825,9 +821,8 @@ async function renderFuelEventForm(editingId, presetVehicleId) {
       <p class="warning" id="km-warning" hidden></p>
       <p class="warning" id="ocr-km-info" hidden></p>
       <div class="field"><label>Litres</label><input type="number" step="0.01" inputmode="decimal" id="f-liters" value="${escapeHtml(state.liters)}" ${locked ? 'disabled' : ''}></div>
-      <div class="field"><label>Prix unitaire (RWF/L)</label><input type="number" inputmode="numeric" id="f-unit-price" value="${escapeHtml(state.unitPrice)}" ${locked ? 'disabled' : ''}></div>
       <div class="field"><label>Montant (RWF)</label><input type="number" inputmode="numeric" id="f-amount" value="${escapeHtml(state.amount)}" ${locked ? 'disabled' : ''}></div>
-      <p class="warning" id="amount-warning" hidden></p>
+      <p class="computed-info" id="unit-price-info" hidden></p>
       <div class="field"><label>Station</label><input type="text" id="f-station" value="${escapeHtml(state.station)}" ${locked ? 'disabled' : ''}></div>
       <div class="field"><label>Notes</label><textarea id="f-notes" ${locked ? 'disabled' : ''}>${escapeHtml(state.notes)}</textarea></div>
 
@@ -847,7 +842,7 @@ async function renderFuelEventForm(editingId, presetVehicleId) {
     `);
 
     renderKmWarning();
-    renderAmountWarning();
+    renderUnitPriceInfo();
     renderOcrKmInfo();
 
     if (locked) return; // aucun listener d'édition à attacher, tout est en lecture seule
@@ -874,15 +869,11 @@ async function renderFuelEventForm(editingId, presetVehicleId) {
     });
     document.getElementById('f-liters').addEventListener('input', (e) => {
       state.liters = e.target.value;
-      renderAmountWarning();
-    });
-    document.getElementById('f-unit-price').addEventListener('input', (e) => {
-      state.unitPrice = e.target.value;
-      renderAmountWarning();
+      renderUnitPriceInfo();
     });
     document.getElementById('f-amount').addEventListener('input', (e) => {
       state.amount = e.target.value;
-      renderAmountWarning();
+      renderUnitPriceInfo();
     });
     document.getElementById('f-station').addEventListener('input', (e) => (state.station = e.target.value));
     document.getElementById('f-notes').addEventListener('input', (e) => (state.notes = e.target.value));
@@ -915,12 +906,12 @@ async function renderFuelEventForm(editingId, presetVehicleId) {
     el.hidden = !info;
   }
 
-  function renderAmountWarning() {
-    const el = document.getElementById('amount-warning');
+  function renderUnitPriceInfo() {
+    const el = document.getElementById('unit-price-info');
     if (!el) return;
-    const warning = computeAmountWarning(state.liters, state.unitPrice, state.amount);
-    el.textContent = warning ?? '';
-    el.hidden = !warning;
+    const price = computeUnitPrice(state.liters, state.amount);
+    el.textContent = price ? `≈ ${price.toLocaleString('fr-FR')} RWF/L (calculé)` : '';
+    el.hidden = !price;
   }
 
   /** Valide les champs et construit l'input pour createFuelEvent/updateFuelEvent.
@@ -935,10 +926,12 @@ async function renderFuelEventForm(editingId, presetVehicleId) {
     }
     const kmNum = parseInt(state.km, 10);
     const litersNum = parseFloat(state.liters);
-    const unitPriceNum = parseInt(state.unitPrice, 10);
     const amountNum = parseInt(state.amount, 10);
-    if (!state.eventDate || Number.isNaN(kmNum) || Number.isNaN(litersNum) || Number.isNaN(unitPriceNum) || Number.isNaN(amountNum)) {
-      errorEl.textContent = 'Vérifie la date, le km, les litres, le prix unitaire et le montant.';
+    // Recalculé à chaque enregistrement, création comme édition : une ancienne entrée
+    // dont on corrige litres/montant garde un prix cohérent avec eux.
+    const unitPriceNum = computeUnitPrice(state.liters, state.amount);
+    if (!state.eventDate || Number.isNaN(kmNum) || Number.isNaN(litersNum) || Number.isNaN(amountNum) || unitPriceNum === null) {
+      errorEl.textContent = 'Vérifie la date, le km, les litres et le montant.';
       errorEl.hidden = false;
       return null;
     }
