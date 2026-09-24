@@ -1,6 +1,6 @@
 // IntelliFleet PWA — routing (hash) + 4 écrans, vanilla JS, sans framework.
-import { supabase } from './supabase-client.js?v=202609220817';
-import { checkKmConsistency } from './km-consistency.js?v=202609220817';
+import { supabase } from './supabase-client.js?v=202609241906';
+import { checkKmConsistency } from './km-consistency.js?v=202609241906';
 import {
   PHOTO_TYPES,
   listVehicles,
@@ -39,8 +39,8 @@ import {
   saveFuelEventOcrResult,
   saveLogbookEntryOcrResult,
   createBugReport,
-} from './api.js?v=202609220817';
-import { buildScopeDashboard, groupVehiclesByFleetGroup, formatMonthLabel } from './dashboard.js?v=202609220817';
+} from './api.js?v=202609241906';
+import { buildScopeDashboard, groupVehiclesByFleetGroup, formatMonthLabel } from './dashboard.js?v=202609241906';
 
 const ACTIVE_VEHICLE_KEY = 'intellifleet:active_vehicle_id';
 const AMOUNT_TOLERANCE_RATIO = 0.005; // 0.5 %
@@ -678,13 +678,73 @@ function photoSlotHtml(type, label, previewUrl, fullWidth, locked = false) {
   `;
 }
 
-/** Attache les listeners des inputs file d'un ensemble de photo-slots. onPicked(type, file). */
+// Compression des photos dès la sélection (caméra ou galerie), avant tout stockage
+// dans l'état du formulaire. Sans ça, chaque photo 12 Mpx gardée en aperçu reste
+// décodée en mémoire (~48 Mo) jusqu'au clic "Enregistrer" : 4 photos d'un plein
+// suffisent à faire tuer/recharger l'onglet sur un téléphone à peu de RAM libre.
+//
+// Côté le plus long (et non largeur) à 1600 px : couvre aussi les photos portrait.
+// C'est l'ordre de grandeur que Claude Vision exploite de toute façon (il réduit
+// lui-même au-delà d'environ 1568 px), donc aucune perte pour l'OCR du compteur.
+// Qualité 0.8 plutôt que 0.75 : quelques Ko de plus, mais moins d'artefacts JPEG
+// autour des arêtes nettes des chiffres.
+const PHOTO_MAX_DIMENSION = 1600;
+const PHOTO_JPEG_QUALITY = 0.8;
+
+/**
+ * Redimensionne + réencode une image en JPEG. Renvoie un Blob (image/jpeg), ou le
+ * fichier d'origine si le décodage échoue (ex. HEIC non supporté par le navigateur)
+ * ou si le résultat ne serait pas plus léger — l'upload se passe alors comme avant.
+ * createImageBitmap plutôt qu'un <img> : décode même si la page n'est pas au premier
+ * plan (img.decode() y reste en attente), applique l'orientation EXIF (option
+ * imageOrientation 'from-image'), et close() libère le bitmap pleine résolution
+ * immédiatement au lieu d'attendre le ramasse-miettes.
+ */
+async function compressImage(file, { maxDimension = PHOTO_MAX_DIMENSION, quality = PHOTO_JPEG_QUALITY } = {}) {
+  let bitmap = null;
+  const canvas = document.createElement('canvas');
+  try {
+    bitmap = await createImageBitmap(file, { imageOrientation: 'from-image' });
+    const { width, height } = bitmap;
+    const scale = Math.min(1, maxDimension / Math.max(width, height));
+    canvas.width = Math.round(width * scale);
+    canvas.height = Math.round(height * scale);
+    canvas.getContext('2d').drawImage(bitmap, 0, 0, canvas.width, canvas.height);
+    bitmap.close();
+    bitmap = null;
+    const blob = await new Promise((resolve) => canvas.toBlob(resolve, 'image/jpeg', quality));
+    if (!blob) throw new Error('canvas.toBlob a renvoyé null');
+    console.info(
+      `[photo] ${width}x${height} ${(file.size / 1024).toFixed(0)} Ko → ` +
+        `${canvas.width}x${canvas.height} ${(blob.size / 1024).toFixed(0)} Ko`
+    );
+    return blob.size < file.size ? blob : file;
+  } catch (err) {
+    console.warn('[photo] compression impossible, fichier d’origine conservé', err);
+    return file;
+  } finally {
+    bitmap?.close();
+    canvas.width = canvas.height = 0;
+  }
+}
+
+/** Libère l'URL d'aperçu locale remplacée (les signedUrl Supabase ne sont pas concernées). */
+function revokePreviewUrl(url) {
+  if (url?.startsWith('blob:')) URL.revokeObjectURL(url);
+}
+
+/**
+ * Attache les listeners des inputs file d'un ensemble de photo-slots. onPicked(type, blob)
+ * reçoit l'image déjà compressée — point d'entrée unique pour le plein et le relevé.
+ */
 function wirePhotoInputs(container, onPicked) {
   container.querySelectorAll('input[type="file"]').forEach((input) => {
-    input.addEventListener('change', (e) => {
+    input.addEventListener('change', async (e) => {
       const file = e.target.files?.[0];
       if (!file) return;
-      onPicked(input.dataset.type, file);
+      // Plus de référence à l'original via l'input : seul le Blob compressé survit.
+      e.target.value = '';
+      onPicked(input.dataset.type, await compressImage(file));
     });
   });
 }
@@ -828,7 +888,8 @@ async function renderFuelEventForm(editingId, presetVehicleId) {
     document.getElementById('f-notes').addEventListener('input', (e) => (state.notes = e.target.value));
 
     wirePhotoInputs(document.getElementById('photo-grid'), (type, file) => {
-      photoState[type] = { ...photoState[type], file, previewUrl: URL.createObjectURL(file) };
+      revokePreviewUrl(photoState[type].previewUrl);
+      photoState[type] ={ ...photoState[type], file, previewUrl: URL.createObjectURL(file) };
       renderForm();
     });
 
@@ -1116,6 +1177,7 @@ async function renderLogbookEntryForm(editingId, presetVehicleId) {
     document.getElementById('f-close-at')?.addEventListener('input', (e) => (state.closeAt = e.target.value));
 
     wirePhotoInputs(document.getElementById('photo-grid'), (_type, file) => {
+      revokePreviewUrl(photo.previewUrl);
       photo.file = file;
       photo.previewUrl = URL.createObjectURL(file);
       renderForm();
