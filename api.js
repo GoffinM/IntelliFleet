@@ -1,7 +1,7 @@
 // Couche data Supabase — port direct des fichiers src/features/*/api.ts de la version
 // React Native, adapté au File/Blob natif du navigateur (input file) au lieu de
 // fetch(uri).arrayBuffer() sur un chemin local RN.
-import { supabase } from './supabase-client.js?v=202609250902';
+import { supabase } from './supabase-client.js?v=202609251140';
 
 export const PHOTO_TYPES = [
   { type: 'vehicle_plate', label: 'Véhicule + plaque' },

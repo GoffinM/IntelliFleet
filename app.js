@@ -1,6 +1,6 @@
 // IntelliFleet PWA — routing (hash) + 4 écrans, vanilla JS, sans framework.
-import { supabase } from './supabase-client.js?v=202609250902';
-import { checkKmConsistency } from './km-consistency.js?v=202609250902';
+import { supabase } from './supabase-client.js?v=202609251140';
+import { checkKmConsistency } from './km-consistency.js?v=202609251140';
 import {
   PHOTO_TYPES,
   listVehicles,
@@ -39,8 +39,8 @@ import {
   saveFuelEventOcrResult,
   saveLogbookEntryOcrResult,
   createBugReport,
-} from './api.js?v=202609250902';
-import { buildScopeDashboard, groupVehiclesByFleetGroup, formatMonthLabel, scopeCurrency } from './dashboard.js?v=202609250902';
+} from './api.js?v=202609251140';
+import { buildScopeDashboard, groupVehiclesByFleetGroup, formatMonthLabel, scopeCurrency } from './dashboard.js?v=202609251140';
 
 const ACTIVE_VEHICLE_KEY = 'intellifleet:active_vehicle_id';
 // Vocabulaire fermé, identique au check SQL (0012_fleet_group_access.sql) : un
@@ -204,6 +204,20 @@ function vehicleChipsHtml(vehicles, activeId) {
 // à l'intérieur d'un wrapper screen-narrow/wide/dashboard/home — ces derniers peuvent
 // devenir une "carte" avec son propre padding/radius sur desktop, ce qui casserait
 // visuellement une barre sticky posée à l'intérieur.
+const ROLE_LABELS = { admin: 'administrateur', driver: 'chauffeur' };
+
+/** "Connecté : Mireille (chauffeur)" — identité visible sur chaque écran (captures,
+ *  exports). Rien tant que le profil charge (undefined) ou s'il est absent (null),
+ *  et jamais le rôle technique brut ("driver"/"admin"). */
+function identityLineHtml() {
+  if (!currentProfile) return '';
+  const role = ROLE_LABELS[currentProfile.role];
+  const name = currentProfile.display_name?.trim();
+  if (!name && !role) return '';
+  const text = name && role ? `${name} (${role})` : name || role;
+  return `<span class="top-bar-identity">Connecté : ${escapeHtml(text)}</span>`;
+}
+
 function topBarHtml(title, { showBack = true } = {}) {
   // Capture du hash courant AU RENDU (pas au clic) : topBarHtml() est rappelée par
   // chaque renderXXX() à chaque changement de route, donc location.hash ici est
@@ -219,6 +233,7 @@ function topBarHtml(title, { showBack = true } = {}) {
       ${showBack ? '<a href="#/" class="top-bar-back">← Accueil</a>' : ''}
       <h1 class="top-bar-title">${escapeHtml(title)}</h1>
       ${reportLink}
+      ${identityLineHtml()}
     </div>
   `;
 }

@@ -55,8 +55,9 @@ h1 {
   top: 0;
   z-index: 10;
   display: flex;
+  flex-wrap: wrap; /* pour la ligne d'identité, seul élément à passer à la ligne */
   align-items: center;
-  gap: 12px;
+  gap: 2px 12px;
   background: var(--card-bg);
   padding: 12px 14px;
   border-radius: 10px;
@@ -77,6 +78,19 @@ h1 {
   text-align: center;
   font-size: 18px;
   margin: 0;
+}
+
+/* Ligne d'identité : rangée à part, pleine largeur, sous retour/titre/signalement —
+   sinon, sur mobile, elle hérite de la seule largeur du titre et se retrouve tronquée
+   ("Connecté : Mire…"), ce qui annule son intérêt sur une capture d'écran. Même
+   style discret que .top-bar-report. */
+.top-bar-identity {
+  flex-basis: 100%;
+  text-align: center;
+  color: var(--text-muted);
+  font-weight: 600;
+  font-size: 12px;
+  overflow-wrap: anywhere;
 }
 
 .top-bar-report {
