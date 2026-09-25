@@ -1,6 +1,6 @@
 // IntelliFleet PWA — routing (hash) + 4 écrans, vanilla JS, sans framework.
-import { supabase } from './supabase-client.js?v=202609241919';
-import { checkKmConsistency } from './km-consistency.js?v=202609241919';
+import { supabase } from './supabase-client.js?v=202609250814';
+import { checkKmConsistency } from './km-consistency.js?v=202609250814';
 import {
   PHOTO_TYPES,
   listVehicles,
@@ -39,8 +39,8 @@ import {
   saveFuelEventOcrResult,
   saveLogbookEntryOcrResult,
   createBugReport,
-} from './api.js?v=202609241919';
-import { buildScopeDashboard, groupVehiclesByFleetGroup, formatMonthLabel } from './dashboard.js?v=202609241919';
+} from './api.js?v=202609250814';
+import { buildScopeDashboard, groupVehiclesByFleetGroup, formatMonthLabel, scopeCurrency } from './dashboard.js?v=202609250814';
 
 const ACTIVE_VEHICLE_KEY = 'intellifleet:active_vehicle_id';
 const OCR_KM_TOLERANCE = 20; // km, écart absolu toléré entre la lecture Claude Vision et le km saisi
@@ -166,7 +166,7 @@ function setActiveVehicleId(id) {
 }
 
 /**
- * Prix unitaire (RWF/L, entier) dérivé du montant et des litres — plus jamais saisi
+ * Prix unitaire (devise du véhicule par litre, entier) dérivé du montant et des litres — plus jamais saisi
  * à la main : seuls litres et montant figurent sur la pompe/le ticket. null si l'un
  * des deux manque ou si le résultat ne serait pas un prix valide (unit_price > 0).
  */
@@ -176,6 +176,17 @@ function computeUnitPrice(liters, amount) {
   if (!(l > 0) || !(a > 0)) return null;
   const price = Math.round(a / l);
   return price >= 1 ? price : null;
+}
+
+/** Devise d'un véhicule (0011_vehicle_currency.sql). Repli sur 'RWF' si la colonne
+ *  est absente (migration pas encore passée) — même valeur que le défaut SQL. */
+function vehicleCurrency(vehicle) {
+  return vehicle?.currency ?? 'RWF';
+}
+
+/** "12 500 BIF" — un montant n'est jamais affiché sans sa devise. */
+function formatAmount(amount, currency) {
+  return `${Math.round(amount).toLocaleString('fr-FR')} ${currency}`;
 }
 
 function vehicleChipsHtml(vehicles, activeId) {
@@ -417,7 +428,7 @@ async function renderHome() {
               lastEvent
                 ? `
               <p class="timeline-line">${lastEvent.event_date} — ${lastEvent.km.toLocaleString('fr-FR')} km</p>
-              <p class="timeline-line">${lastEvent.liters} L · ${lastEvent.amount.toLocaleString('fr-FR')} RWF</p>
+              <p class="timeline-line">${lastEvent.liters} L · ${formatAmount(lastEvent.amount, vehicleCurrency(activeVehicle))}</p>
               ${lastEvent.station ? `<p class="timeline-line">${escapeHtml(lastEvent.station)}</p>` : ''}
               ${lastEvent.driver_name ? `<p class="timeline-line">Chauffeur : ${escapeHtml(lastEvent.driver_name)}</p>` : ''}
               ${!lastEvent.is_complete ? '<p class="incomplete-tag">Photos incomplètes</p>' : ''}
@@ -564,12 +575,12 @@ function toTimeline(fuelEvents, logbookEntries) {
   });
 }
 
-function renderTimelineRow(item) {
+function renderTimelineRow(item, currency) {
   const kindLabel = item.kind === 'fuel' ? 'Plein' : 'Relevé';
   const detailLines =
     item.kind === 'fuel'
       ? `
-        <span class="timeline-line">${item.liters} L · ${item.amount.toLocaleString('fr-FR')} RWF</span>
+        <span class="timeline-line">${item.liters} L · ${formatAmount(item.amount, currency)}</span>
         ${item.station ? `<span class="timeline-line">${escapeHtml(item.station)}</span>` : ''}
         ${!item.isComplete ? '<span class="incomplete-tag">Photos incomplètes</span>' : ''}
       `
@@ -610,13 +621,14 @@ async function renderHistory() {
     ]);
     items = toTimeline(fuelEvents, logbookEntries);
   }
+  const currency = vehicleCurrency(vehicles.find((v) => v.id === activeVehicleId));
 
   setContent(`
     ${topBarHtml('Historique')}
     <div class="screen-wide">
     <div class="chip-row" id="vehicle-chips">${vehicleChipsHtml(vehicles, activeVehicleId)}</div>
     ${items.length === 0 ? '<p class="empty-text">Aucun événement enregistré pour ce véhicule.</p>' : ''}
-    <div class="timeline-list">${items.map(renderTimelineRow).join('')}</div>
+    <div class="timeline-list">${items.map((item) => renderTimelineRow(item, currency)).join('')}</div>
     </div>
   `);
 
@@ -821,7 +833,7 @@ async function renderFuelEventForm(editingId, presetVehicleId) {
       <p class="warning" id="km-warning" hidden></p>
       <p class="warning" id="ocr-km-info" hidden></p>
       <div class="field"><label>Litres</label><input type="number" step="0.01" inputmode="decimal" id="f-liters" value="${escapeHtml(state.liters)}" ${locked ? 'disabled' : ''}></div>
-      <div class="field"><label>Montant (RWF)</label><input type="number" inputmode="numeric" id="f-amount" value="${escapeHtml(state.amount)}" ${locked ? 'disabled' : ''}></div>
+      <div class="field"><label>Montant (<span id="amount-currency">${vehicleCurrency(currentVehicle())}</span>)</label><input type="number" inputmode="numeric" id="f-amount" value="${escapeHtml(state.amount)}" ${locked ? 'disabled' : ''}></div>
       <p class="computed-info" id="unit-price-info" hidden></p>
       <div class="field"><label>Station</label><input type="text" id="f-station" value="${escapeHtml(state.station)}" ${locked ? 'disabled' : ''}></div>
       <div class="field"><label>Notes</label><textarea id="f-notes" ${locked ? 'disabled' : ''}>${escapeHtml(state.notes)}</textarea></div>
@@ -852,6 +864,7 @@ async function renderFuelEventForm(editingId, presetVehicleId) {
         state.vehicleId = chip.dataset.id;
         document.querySelectorAll('#vehicle-chips .chip').forEach((c) => c.classList.toggle('active', c === chip));
         renderKmWarning();
+        renderCurrency();
       });
     });
     document.querySelectorAll('#driver-chips .chip').forEach((chip) => {
@@ -906,11 +919,18 @@ async function renderFuelEventForm(editingId, presetVehicleId) {
     el.hidden = !info;
   }
 
+  /** La devise suit le véhicule sélectionné, pas celui présent à l'ouverture. */
+  function renderCurrency() {
+    const el = document.getElementById('amount-currency');
+    if (el) el.textContent = vehicleCurrency(currentVehicle());
+    renderUnitPriceInfo();
+  }
+
   function renderUnitPriceInfo() {
     const el = document.getElementById('unit-price-info');
     if (!el) return;
     const price = computeUnitPrice(state.liters, state.amount);
-    el.textContent = price ? `≈ ${price.toLocaleString('fr-FR')} RWF/L (calculé)` : '';
+    el.textContent = price ? `≈ ${price.toLocaleString('fr-FR')} ${vehicleCurrency(currentVehicle())}/L (calculé)` : '';
     el.hidden = !price;
   }
 
@@ -1610,7 +1630,10 @@ const DASHBOARD_VIEWS = [
 // n'a pas besoin de survivre à une navigation ailleurs puis un retour.
 let dashboardState = null;
 
-function dashboardChartSvg(monthlyAsc, metric) {
+function dashboardChartSvg(monthlyAsc, metric, mixedCurrency) {
+  if (metric === 'cost' && mixedCurrency) {
+    return '<p class="empty-text">Coûts non affichés : cette vue mélange plusieurs devises.</p>';
+  }
   const width = 320;
   const height = 130;
   const padding = 22;
@@ -1650,7 +1673,10 @@ function dashboardChartSvg(monthlyAsc, metric) {
   `;
 }
 
-function dashboardMonthlyTableHtml(monthly) {
+/** mixedCurrency : Coût et Coût/km remplacés par "—" (jamais de somme RWF + BIF).
+ *  currency : devise unique de la vue, affichée dans les en-têtes. */
+function dashboardMonthlyTableHtml(monthly, currency, mixedCurrency) {
+  const currencyLabel = currency ? ` (${currency})` : '';
   if (monthly.length === 0) return '<p class="empty-text">Aucune donnée validée pour cette sélection.</p>';
   const rows = monthly
     .map(
@@ -1659,8 +1685,8 @@ function dashboardMonthlyTableHtml(monthly) {
       <td>${escapeHtml(formatMonthLabel(r.month))}</td>
       <td>${r.km.toLocaleString('fr-FR')}</td>
       <td>${r.liters.toLocaleString('fr-FR', { maximumFractionDigits: 1 })}</td>
-      <td>${Math.round(r.amount).toLocaleString('fr-FR')}</td>
-      <td>${r.costPerKm != null ? Math.round(r.costPerKm).toLocaleString('fr-FR') : '—'}</td>
+      <td>${mixedCurrency ? '—' : Math.round(r.amount).toLocaleString('fr-FR')}</td>
+      <td>${!mixedCurrency && r.costPerKm != null ? Math.round(r.costPerKm).toLocaleString('fr-FR') : '—'}</td>
       <td>${r.litersPer100km != null ? r.litersPer100km.toFixed(1) : '—'}</td>
     </tr>
   `
@@ -1669,7 +1695,7 @@ function dashboardMonthlyTableHtml(monthly) {
   return `
     <div style="overflow-x:auto">
       <table class="data-table">
-        <thead><tr><th>Mois</th><th>Km</th><th>Litres</th><th>Coût</th><th>Coût/km</th><th>L/100km</th></tr></thead>
+        <thead><tr><th>Mois</th><th>Km</th><th>Litres</th><th>Coût${currencyLabel}</th><th>Coût/km${currencyLabel}</th><th>L/100km</th></tr></thead>
         <tbody>${rows}</tbody>
       </table>
     </div>
@@ -1899,6 +1925,7 @@ async function renderValidation() {
   function buildCsvForScope(scopeIds) {
     const scopeSet = new Set(scopeIds);
     const vehicleName = (id) => vehicles.find((v) => v.id === id)?.name ?? '';
+    const currencyOf = (id) => vehicleCurrency(vehicles.find((v) => v.id === id));
 
     const rows = [];
     for (const e of validatedFuelAll) {
@@ -1912,6 +1939,7 @@ async function renderValidation() {
         e.liters ?? '',
         e.unit_price ?? '',
         e.amount ?? '',
+        currencyOf(e.vehicle_id), // montants de devises différentes dans un même fichier
         e.station ?? '',
         '', // commentaire : ne s'applique pas à un plein
       ]);
@@ -1924,7 +1952,8 @@ async function renderValidation() {
         e.event_date,
         e.km,
         e.driver_name ?? '',
-        '', // litres/prix unitaire/montant/station : ne s'appliquent pas à un relevé
+        '', // litres/prix unitaire/montant/devise/station : ne s'appliquent pas à un relevé
+        '',
         '',
         '',
         '',
@@ -1933,7 +1962,7 @@ async function renderValidation() {
     }
     rows.sort((a, b) => (a[2] < b[2] ? -1 : a[2] > b[2] ? 1 : 0)); // par date croissante
 
-    const header = ['Type', 'Véhicule', 'Date', 'Km', 'Chauffeur', 'Litres', 'Prix unitaire', 'Montant', 'Station', 'Commentaire'];
+    const header = ['Type', 'Véhicule', 'Date', 'Km', 'Chauffeur', 'Litres', 'Prix unitaire', 'Montant', 'Devise', 'Station', 'Commentaire'];
     return [header, ...rows].map((row) => row.map(csvEscape).join(',')).join('\r\n');
   }
 
@@ -1949,10 +1978,16 @@ async function renderValidation() {
     const pendingScoped = pending.filter((p) => scopeSet.has(p.vehicleId)).length;
     const { monthly, drivers } = buildScopeDashboard(scopeIds, validatedFuelAll, validatedLogbookAll);
     const monthlyAsc = [...monthly].reverse();
+    const { currencies, currency, mixed: mixedCurrency } = scopeCurrency(vehicles, scopeIds);
 
     const zone = document.getElementById('dashboard-zone');
     zone.innerHTML = `
       <p class="dashboard-scope-banner">${validatedCount.toLocaleString('fr-FR')} entrées validées · ${pendingScoped.toLocaleString('fr-FR')} en attente de validation</p>
+      ${
+        mixedCurrency
+          ? `<p class="warning">Devises mixtes (${currencies.join(' + ')}) : coûts non additionnables — voir « Par véhicule » ou un groupe d'une seule devise.</p>`
+          : ''
+      }
 
       <div class="dashboard-layout">
         <div class="dashboard-controls">
@@ -1987,12 +2022,12 @@ async function renderValidation() {
             <button class="chip ${dashboardState.metric === 'cost' ? 'active' : ''}" data-metric="cost">Coût</button>
             <button class="chip ${dashboardState.metric === 'consumption' ? 'active' : ''}" data-metric="consumption">Consommation</button>
           </div>
-          ${dashboardChartSvg(monthlyAsc, dashboardState.metric)}
+          ${dashboardChartSvg(monthlyAsc, dashboardState.metric, mixedCurrency)}
         </div>
 
         <div class="dashboard-tables">
           <div class="section-label">Détail mensuel</div>
-          ${dashboardMonthlyTableHtml(monthly)}
+          ${dashboardMonthlyTableHtml(monthly, currency, mixedCurrency)}
 
           <div class="section-label">Par chauffeur</div>
           ${dashboardDriverTableHtml(drivers)}

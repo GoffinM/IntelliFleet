@@ -144,3 +144,17 @@ export function buildScopeDashboard(vehicleIds, fuelEvents, logbookEntries) {
     drivers: computeDriverStats(segments),
   };
 }
+
+/** Devise(s) d'un ensemble de véhicules (0011_vehicle_currency.sql). Parc mixte
+ *  RWF/BIF : des montants de devises différentes ne s'additionnent JAMAIS — si la vue
+ *  est mixte, currency vaut null et l'appelant masque coûts et coût/km au lieu
+ *  d'afficher un total faux. Une vue vide n'est pas mixte (currency null aussi). */
+export function scopeCurrency(vehicles, vehicleIds) {
+  const scopeSet = new Set(vehicleIds);
+  const currencies = [...new Set(vehicles.filter((v) => scopeSet.has(v.id)).map((v) => v.currency ?? 'RWF'))].sort();
+  return {
+    currencies,
+    currency: currencies.length === 1 ? currencies[0] : null,
+    mixed: currencies.length > 1,
+  };
+}
