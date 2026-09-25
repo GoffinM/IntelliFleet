@@ -1,12 +1,13 @@
 // IntelliFleet PWA — routing (hash) + 4 écrans, vanilla JS, sans framework.
-import { supabase } from './supabase-client.js?v=202609251419';
-import { checkKmConsistency } from './km-consistency.js?v=202609251419';
+import { supabase } from './supabase-client.js?v=202609251507';
+import { checkKmConsistency } from './km-consistency.js?v=202609251507';
 import {
   PHOTO_TYPES,
   listVehicles,
   listDrivers,
   createVehicle,
   createDriver,
+  listMyFleetGroups,
   getMyProfile,
   getLastFuelEvent,
   listFuelEvents,
@@ -39,8 +40,8 @@ import {
   saveFuelEventOcrResult,
   saveLogbookEntryOcrResult,
   createBugReport,
-} from './api.js?v=202609251419';
-import { buildScopeDashboard, groupVehiclesByFleetGroup, formatMonthLabel, scopeCurrency } from './dashboard.js?v=202609251419';
+} from './api.js?v=202609251507';
+import { buildScopeDashboard, groupVehiclesByFleetGroup, formatMonthLabel, scopeCurrency } from './dashboard.js?v=202609251507';
 
 const ACTIVE_VEHICLE_KEY = 'intellifleet:active_vehicle_id';
 // Vocabulaire fermé, identique au check SQL (0012_fleet_group_access.sql) : un
@@ -199,6 +200,38 @@ function vehicleChipsHtml(vehicles, activeId) {
     .join('');
 }
 
+/** Chauffeurs proposés pour le véhicule sélectionné (0014_driver_fleet_group.sql) :
+ *  ceux de son groupe + les occasionnels (fleet_group null, toujours visibles).
+ *  keepId : chauffeur déjà enregistré sur l'entrée, affiché même hors groupe tant que
+ *  le véhicule d'origine reste sélectionné — rouvrir un ancien plein ne doit jamais
+ *  faire disparaître son chauffeur. */
+function driversForVehicle(drivers, vehicle, keepId) {
+  const group = vehicle?.fleet_group ?? null;
+  return drivers.filter((d) => d.fleet_group == null || d.fleet_group === group || d.id === keepId);
+}
+
+/** (Re)dessine les chips chauffeur (#driver-chips) des formulaires plein/relevé —
+ *  au rendu initial et à chaque changement de véhicule. Un chauffeur sélectionné qui
+ *  n'est plus proposé pour le nouveau véhicule repasse à "Aucun" : jamais un
+ *  chauffeur Burundi enregistré sur un véhicule Rwanda par inadvertance. */
+function renderDriverChips({ drivers, vehicle, keepId, state, locked }) {
+  const el = document.getElementById('driver-chips');
+  if (!el) return;
+  const shown = driversForVehicle(drivers, vehicle, keepId);
+  if (state.driverId && !shown.some((d) => d.id === state.driverId)) state.driverId = null;
+  el.innerHTML = `
+    <button class="chip ${state.driverId === null ? 'active' : ''}" data-id="" ${locked ? 'disabled' : ''}>Aucun</button>
+    ${shown.map((d) => `<button class="chip ${state.driverId === d.id ? 'active' : ''}" data-id="${d.id}" ${locked ? 'disabled' : ''}>${escapeHtml(d.name)}</button>`).join('')}
+  `;
+  if (locked) return;
+  el.querySelectorAll('.chip').forEach((chip) => {
+    chip.addEventListener('click', () => {
+      state.driverId = chip.dataset.id || null;
+      el.querySelectorAll('.chip').forEach((c) => c.classList.toggle('active', c === chip));
+    });
+  });
+}
+
 // Barre de navigation sticky (retour terrain : éviter d'avoir à redescendre tout en
 // bas de l'écran pour revenir à l'accueil). Toujours un enfant direct de #app, JAMAIS
 // à l'intérieur d'un wrapper screen-narrow/wide/dashboard/home — ces derniers peuvent
@@ -268,7 +301,8 @@ let lastRenderedKey;
 // onAuthStateChange plus bas.
 let currentProfile;
 
-const ADMIN_ONLY_PAGES = ['vehicle-form', 'driver-form', 'validation'];
+// driver-form ouvert à tous depuis 0014 (création limitée à ses groupes par la RLS).
+const ADMIN_ONLY_PAGES = ['vehicle-form', 'validation'];
 
 async function route() {
   const {
@@ -419,6 +453,7 @@ async function renderHome() {
 
         <div class="link-row">
           <a href="#/history">Historique →</a>
+          <a href="#/driver-form">+ Chauffeur</a>
         </div>
 
         ${
@@ -426,7 +461,6 @@ async function renderHome() {
             ? `
         <div class="link-row">
           <a href="#/vehicle-form">+ Véhicule</a>
-          <a href="#/driver-form">+ Chauffeur</a>
           <a href="#/validation">Tableau de bord${pendingCount > 0 ? ` (${pendingCount})` : ''}</a>
         </div>
         `
@@ -825,6 +859,16 @@ async function renderFuelEventForm(editingId, presetVehicleId) {
     return vehicles.find((v) => v.id === state.vehicleId) ?? null;
   }
 
+  function drawDriverChips() {
+    renderDriverChips({
+      drivers,
+      vehicle: currentVehicle(),
+      keepId: existing && state.vehicleId === existing.vehicle_id ? existing.driver_id : null,
+      state,
+      locked,
+    });
+  }
+
   function renderForm() {
     setContent(`
       ${topBarHtml(editingId ? 'Modifier le plein' : 'Nouveau plein')}
@@ -846,10 +890,7 @@ async function renderFuelEventForm(editingId, presetVehicleId) {
       <div class="chip-row" id="vehicle-chips">${vehicleChipsHtml(vehicles, state.vehicleId)}</div>
 
       <div class="section-label">Chauffeur (optionnel)</div>
-      <div class="chip-row" id="driver-chips">
-        <button class="chip ${state.driverId === null ? 'active' : ''}" data-id="" ${locked ? 'disabled' : ''}>Aucun</button>
-        ${drivers.map((d) => `<button class="chip ${state.driverId === d.id ? 'active' : ''}" data-id="${d.id}" ${locked ? 'disabled' : ''}>${escapeHtml(d.name)}</button>`).join('')}
-      </div>
+      <div class="chip-row" id="driver-chips"></div>
 
       <div class="section-label">Détails</div>
       <div class="field"><label>Date (AAAA-MM-JJ)</label><input type="date" id="f-date" value="${state.eventDate}" ${locked ? 'disabled' : ''}></div>
@@ -880,6 +921,7 @@ async function renderFuelEventForm(editingId, presetVehicleId) {
     renderKmWarning();
     renderUnitPriceInfo();
     renderOcrKmInfo();
+    drawDriverChips(); // avant le return : les chips s'affichent aussi en lecture seule
 
     if (locked) return; // aucun listener d'édition à attacher, tout est en lecture seule
 
@@ -889,12 +931,7 @@ async function renderFuelEventForm(editingId, presetVehicleId) {
         document.querySelectorAll('#vehicle-chips .chip').forEach((c) => c.classList.toggle('active', c === chip));
         renderKmWarning();
         renderCurrency();
-      });
-    });
-    document.querySelectorAll('#driver-chips .chip').forEach((chip) => {
-      chip.addEventListener('click', () => {
-        state.driverId = chip.dataset.id || null;
-        document.querySelectorAll('#driver-chips .chip').forEach((c) => c.classList.toggle('active', c === chip));
+        drawDriverChips();
       });
     });
 
@@ -1125,6 +1162,16 @@ async function renderLogbookEntryForm(editingId, presetVehicleId) {
     return vehicles.find((v) => v.id === state.vehicleId) ?? null;
   }
 
+  function drawDriverChips() {
+    renderDriverChips({
+      drivers,
+      vehicle: currentVehicle(),
+      keepId: existing && state.vehicleId === existing.vehicle_id ? existing.driver_id : null,
+      state,
+      locked,
+    });
+  }
+
   function renderForm() {
     setContent(`
       ${topBarHtml(editingId ? 'Modifier le relevé' : 'Nouveau relevé')}
@@ -1142,10 +1189,7 @@ async function renderLogbookEntryForm(editingId, presetVehicleId) {
       <div class="chip-row" id="vehicle-chips">${vehicleChipsHtml(vehicles, state.vehicleId)}</div>
 
       <div class="section-label">Chauffeur (optionnel)</div>
-      <div class="chip-row" id="driver-chips">
-        <button class="chip ${state.driverId === null ? 'active' : ''}" data-id="" ${locked ? 'disabled' : ''}>Aucun</button>
-        ${drivers.map((d) => `<button class="chip ${state.driverId === d.id ? 'active' : ''}" data-id="${d.id}" ${locked ? 'disabled' : ''}>${escapeHtml(d.name)}</button>`).join('')}
-      </div>
+      <div class="chip-row" id="driver-chips"></div>
 
       <div class="section-label">Détails</div>
       <div class="field"><label>Date (AAAA-MM-JJ)</label><input type="date" id="f-date" value="${state.eventDate}" ${locked ? 'disabled' : ''}></div>
@@ -1183,6 +1227,7 @@ async function renderLogbookEntryForm(editingId, presetVehicleId) {
     renderKmWarning();
     renderCloseKmWarning();
     renderOcrKmInfo();
+    drawDriverChips(); // avant le return : les chips s'affichent aussi en lecture seule
 
     if (locked) return;
 
@@ -1191,12 +1236,7 @@ async function renderLogbookEntryForm(editingId, presetVehicleId) {
         state.vehicleId = chip.dataset.id;
         document.querySelectorAll('#vehicle-chips .chip').forEach((c) => c.classList.toggle('active', c === chip));
         renderKmWarning();
-      });
-    });
-    document.querySelectorAll('#driver-chips .chip').forEach((chip) => {
-      chip.addEventListener('click', () => {
-        state.driverId = chip.dataset.id || null;
-        document.querySelectorAll('#driver-chips .chip').forEach((c) => c.classList.toggle('active', c === chip));
+        drawDriverChips();
       });
     });
 
@@ -1529,11 +1569,42 @@ async function renderVehicleForm() {
 
 // ---------- Écran : nouveau chauffeur (admin only) ----------
 
+/** Admin : tous les groupes + "Aucun (occasionnel)". Non-admin (0014) : ses seuls
+ *  groupes — un seul = assigné d'office, sans sélecteur ; aucun = pas de création. */
 async function renderDriverForm() {
+  setLoading();
+  const isAdmin = currentProfile?.role === 'admin';
+  const groups = isAdmin ? FLEET_GROUPS : await listMyFleetGroups();
+
+  if (!isAdmin && groups.length === 0) {
+    setContent(`
+      ${topBarHtml('Nouveau chauffeur')}
+      <div class="screen-narrow">
+      <p class="empty-text">Aucun groupe de flotte ne t'est attribué : impossible d'ajouter un chauffeur. Contacte l'administrateur.</p>
+      </div>
+    `);
+    return;
+  }
+
+  let groupFieldHtml;
+  if (isAdmin) {
+    groupFieldHtml = `<div class="field"><label>Groupe de flotte</label><select id="f-fleet-group">
+      <option value="">Aucun (occasionnel, proposé sur tous les véhicules)</option>
+      ${groups.map((g) => `<option value="${escapeHtml(g)}">${escapeHtml(g)}</option>`).join('')}
+    </select></div>`;
+  } else if (groups.length > 1) {
+    groupFieldHtml = `<div class="field"><label>Groupe de flotte</label><select id="f-fleet-group">
+      ${groups.map((g) => `<option value="${escapeHtml(g)}">${escapeHtml(g)}</option>`).join('')}
+    </select></div>`;
+  } else {
+    groupFieldHtml = `<p class="computed-info">Groupe : ${escapeHtml(groups[0])}</p>`;
+  }
+
   setContent(`
     ${topBarHtml('Nouveau chauffeur')}
     <div class="screen-narrow">
     <div class="field"><label>Nom</label><input type="text" id="f-name"></div>
+    ${groupFieldHtml}
     <p class="error" id="form-error" hidden></p>
     <button class="btn btn-primary" id="btn-submit">Créer le chauffeur</button>
     </div>
@@ -1550,11 +1621,13 @@ async function renderDriverForm() {
       errorEl.hidden = false;
       return;
     }
+    const select = document.getElementById('f-fleet-group');
+    const fleetGroup = select ? select.value || null : groups[0];
 
     submitBtn.disabled = true;
     submitBtn.textContent = 'Création…';
     try {
-      await createDriver({ name });
+      await createDriver({ name, fleetGroup });
       location.hash = '#/';
     } catch (e) {
       errorEl.textContent = e.message || String(e);

@@ -1,7 +1,7 @@
 // Couche data Supabase — port direct des fichiers src/features/*/api.ts de la version
 // React Native, adapté au File/Blob natif du navigateur (input file) au lieu de
 // fetch(uri).arrayBuffer() sur un chemin local RN.
-import { supabase } from './supabase-client.js?v=202609251419';
+import { supabase } from './supabase-client.js?v=202609251507';
 
 export const PHOTO_TYPES = [
   { type: 'vehicle_plate', label: 'Véhicule + plaque' },
@@ -45,10 +45,29 @@ export async function createVehicle(input) {
 }
 
 /** Création admin only côté RLS (0005_fleet_multi_user.sql) — l'UI n'est qu'une commodité. */
+/** Admin : tout groupe, y compris null (occasionnel). Non-admin : uniquement l'un de
+ *  ses groupes — imposé par la RLS (0014_driver_fleet_group.sql), l'UI n'est qu'une
+ *  commodité. */
 export async function createDriver(input) {
-  const { data, error } = await supabase.from('drivers').insert({ name: input.name }).select().single();
-  if (error) throw error;
+  const { data, error } = await supabase
+    .from('drivers')
+    .insert({ name: input.name, fleet_group: input.fleetGroup })
+    .select()
+    .single();
+  if (error) {
+    // drivers_group_name_key (0014) : même nom (majuscules ignorées) déjà actif dans ce groupe
+    if (error.code === '23505') throw new Error('Ce chauffeur existe déjà dans ce groupe.');
+    throw error;
+  }
   return data;
+}
+
+/** Groupes accordés au compte connecté (driver_fleet_access), via my_fleet_groups()
+ *  — la table elle-même n'est lisible que par l'admin (0012). */
+export async function listMyFleetGroups() {
+  const { data, error } = await supabase.rpc('my_fleet_groups');
+  if (error) throw error;
+  return data ?? [];
 }
 
 // ---------- Signalement de bug (0010_bug_reports.sql) ----------
