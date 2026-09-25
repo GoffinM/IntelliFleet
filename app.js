@@ -1663,12 +1663,15 @@ function validationPendingTableHtml(items) {
   `;
 }
 
+/** Case à cocher uniquement sur les entrées qui ont encore des photos (inutile sur
+ *  celles déjà nettoyées) — sélection pour "Supprimer les photos sélectionnées". */
 function validationDoneTableHtml(items) {
   if (items.length === 0) return '<p class="empty-text">Aucune entrée validée récemment.</p>';
   const rows = items
     .map(
       (item) => `
     <tr>
+      <td>${item.photos.length > 0 ? `<input type="checkbox" class="done-photos-checkbox" data-kind="${item.kind}" data-id="${item.id}">` : ''}</td>
       <td>${item.kind === 'fuel' ? 'Plein' : 'Relevé'}</td>
       <td>${escapeHtml(item.vehicleName)}</td>
       <td>${item.date}</td>
@@ -1683,7 +1686,7 @@ function validationDoneTableHtml(items) {
   return `
     <div style="overflow-x:auto">
       <table class="data-table validation-table">
-        <thead><tr><th>Type</th><th>Véhicule</th><th>Date</th><th>Km</th><th>Chauffeur</th><th>Photos</th><th></th></tr></thead>
+        <thead><tr><th><input type="checkbox" id="select-all-done"></th><th>Type</th><th>Véhicule</th><th>Date</th><th>Km</th><th>Chauffeur</th><th>Photos</th><th></th></tr></thead>
         <tbody>${rows}</tbody>
       </table>
     </div>
@@ -1838,6 +1841,13 @@ async function renderValidation() {
     ${validationPendingTableHtml(pending)}
 
     <div class="section-label">Validées récemment</div>
+    ${
+      done.some((item) => item.photos.length > 0)
+        ? `<div class="btn-row">
+      <button class="btn btn-destructive" id="btn-delete-photos-selected" disabled>Supprimer les photos sélectionnées (0)</button>
+    </div>`
+        : ''
+    }
     ${validationDoneTableHtml(done)}
 
     <div class="divider"></div>
@@ -1874,6 +1884,48 @@ async function renderValidation() {
       cb.dataset.manual = 'true';
     });
     updateValidateSelectedButton();
+  });
+
+  // ---- Suppression groupée des photos (Validées récemment) : même patron que
+  // "Valider la sélection" ----
+
+  function updateDeletePhotosSelectedButton() {
+    const btn = document.getElementById('btn-delete-photos-selected');
+    if (!btn) return;
+    const checked = document.querySelectorAll('.done-photos-checkbox:checked').length;
+    btn.textContent = `Supprimer les photos sélectionnées (${checked})`;
+    btn.disabled = checked === 0;
+  }
+
+  document.querySelectorAll('.done-photos-checkbox').forEach((cb) => {
+    cb.addEventListener('change', updateDeletePhotosSelectedButton);
+  });
+
+  document.getElementById('select-all-done')?.addEventListener('change', (e) => {
+    document.querySelectorAll('.done-photos-checkbox').forEach((cb) => (cb.checked = e.target.checked));
+    updateDeletePhotosSelectedButton();
+  });
+
+  document.getElementById('btn-delete-photos-selected')?.addEventListener('click', async (e) => {
+    const btn = e.currentTarget;
+    const checked = [...document.querySelectorAll('.done-photos-checkbox:checked')];
+    if (checked.length === 0) return;
+    if (!confirm(`Supprimer les photos de ${checked.length} entrées ? Cette action est irréversible.`)) return;
+    errorEl.hidden = true;
+    btn.disabled = true;
+    // allSettled (et non all) : une entrée en échec n'empêche pas les autres, et
+    // l'écran est rechargé dans tous les cas pour refléter ce qui a réellement été
+    // supprimé — l'erreur est ré-affichée après le rechargement.
+    const results = await Promise.allSettled(
+      checked.map((cb) => (cb.dataset.kind === 'fuel' ? deleteFuelEventPhotos(cb.dataset.id) : deleteLogbookEntryPhoto(cb.dataset.id)))
+    );
+    const failed = results.filter((r) => r.status === 'rejected');
+    await renderValidation();
+    if (failed.length > 0) {
+      const el = document.getElementById('validation-error');
+      el.textContent = `${failed.length} suppression(s) sur ${checked.length} en échec : ${failed[0].reason?.message || String(failed[0].reason)}`;
+      el.hidden = false;
+    }
   });
 
   document.getElementById('btn-validate-selected')?.addEventListener('click', async (e) => {
