@@ -1,6 +1,6 @@
 // IntelliFleet PWA — routing (hash) + 4 écrans, vanilla JS, sans framework.
-import { supabase } from './supabase-client.js?v=202609250814';
-import { checkKmConsistency } from './km-consistency.js?v=202609250814';
+import { supabase } from './supabase-client.js?v=202609250902';
+import { checkKmConsistency } from './km-consistency.js?v=202609250902';
 import {
   PHOTO_TYPES,
   listVehicles,
@@ -39,10 +39,14 @@ import {
   saveFuelEventOcrResult,
   saveLogbookEntryOcrResult,
   createBugReport,
-} from './api.js?v=202609250814';
-import { buildScopeDashboard, groupVehiclesByFleetGroup, formatMonthLabel, scopeCurrency } from './dashboard.js?v=202609250814';
+} from './api.js?v=202609250902';
+import { buildScopeDashboard, groupVehiclesByFleetGroup, formatMonthLabel, scopeCurrency } from './dashboard.js?v=202609250902';
 
 const ACTIVE_VEHICLE_KEY = 'intellifleet:active_vehicle_id';
+// Vocabulaire fermé, identique au check SQL (0012_fleet_group_access.sql) : un
+// chauffeur ne voit que les véhicules des groupes qui lui sont accordés, un véhicule
+// sans groupe n'est visible que par l'admin.
+const FLEET_GROUPS = ['SHER Rwanda', 'SHER Burundi', 'Privés'];
 const OCR_KM_TOLERANCE = 20; // km, écart absolu toléré entre la lecture Claude Vision et le km saisi
 const OCR_CONCURRENCY = 2; // appels analyze-odometer simultanés max (pas 10 d'un coup)
 
@@ -1430,7 +1434,10 @@ async function renderVehicleForm() {
     <div class="field"><label>Année (optionnel)</label><input type="number" inputmode="numeric" id="f-year"></div>
     <div class="field"><label>Km initial</label><input type="number" inputmode="numeric" id="f-initial-km" value="0"></div>
     <div class="field"><label>Capacité réservoir en litres (optionnel)</label><input type="number" step="0.1" inputmode="decimal" id="f-tank"></div>
-    <div class="field"><label>Groupe de flotte (optionnel)</label><input type="text" id="f-fleet-group" placeholder="ex. Privés, SHER Rwanda, SHER Burundi"></div>
+    <div class="field"><label>Groupe de flotte</label><select id="f-fleet-group">
+      <option value="">Aucun (visible par l'admin seulement)</option>
+      ${FLEET_GROUPS.map((g) => `<option value="${escapeHtml(g)}">${escapeHtml(g)}</option>`).join('')}
+    </select></div>
     <p class="error" id="form-error" hidden></p>
     <button class="btn btn-primary" id="btn-submit">Créer le véhicule</button>
     </div>
@@ -1448,7 +1455,7 @@ async function renderVehicleForm() {
     const yearRaw = document.getElementById('f-year').value;
     const initialKmRaw = document.getElementById('f-initial-km').value;
     const tankRaw = document.getElementById('f-tank').value;
-    const fleetGroupRaw = document.getElementById('f-fleet-group').value.trim();
+    const fleetGroupRaw = document.getElementById('f-fleet-group').value;
     if (!name || !plate || !make || !model) {
       errorEl.textContent = 'Nom, plaque, marque et modèle sont obligatoires.';
       errorEl.hidden = false;
