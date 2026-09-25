@@ -1,6 +1,6 @@
 // IntelliFleet PWA — routing (hash) + 4 écrans, vanilla JS, sans framework.
-import { supabase } from './supabase-client.js?v=202609251140';
-import { checkKmConsistency } from './km-consistency.js?v=202609251140';
+import { supabase } from './supabase-client.js?v=202609251419';
+import { checkKmConsistency } from './km-consistency.js?v=202609251419';
 import {
   PHOTO_TYPES,
   listVehicles,
@@ -39,8 +39,8 @@ import {
   saveFuelEventOcrResult,
   saveLogbookEntryOcrResult,
   createBugReport,
-} from './api.js?v=202609251140';
-import { buildScopeDashboard, groupVehiclesByFleetGroup, formatMonthLabel, scopeCurrency } from './dashboard.js?v=202609251140';
+} from './api.js?v=202609251419';
+import { buildScopeDashboard, groupVehiclesByFleetGroup, formatMonthLabel, scopeCurrency } from './dashboard.js?v=202609251419';
 
 const ACTIVE_VEHICLE_KEY = 'intellifleet:active_vehicle_id';
 // Vocabulaire fermé, identique au check SQL (0012_fleet_group_access.sql) : un
@@ -831,6 +831,11 @@ async function renderFuelEventForm(editingId, presetVehicleId) {
       <div class="screen-narrow">
 
       ${locked ? `<p class="warning">Validé le ${existing.validated_at.slice(0, 10)} — modification impossible.</p>` : ''}
+      ${photoErrorsHtml(
+        Object.entries(existing?.photos ?? {})
+          .filter(([, p]) => p.signError)
+          .map(([type, p]) => `${PHOTO_LABELS[type] ?? type} : ${p.signError}`)
+      )}
 
       <div class="section-label">Photos (optionnelles à la saisie)</div>
       <div class="photo-grid" id="photo-grid">
@@ -1126,6 +1131,7 @@ async function renderLogbookEntryForm(editingId, presetVehicleId) {
       <div class="screen-narrow">
 
       ${locked ? `<p class="warning">Validé le ${existing.validated_at.slice(0, 10)} — modification impossible.</p>` : ''}
+      ${photoErrorsHtml(existing?.photoSignError ? [`Compteur : ${existing.photoSignError}`] : [])}
 
       <div class="section-label">Photo (optionnelle)</div>
       <div class="photo-grid" id="photo-grid">
@@ -1570,10 +1576,32 @@ async function renderDriverForm() {
 
 // Cliquable : renvoie vers l'écran d'édition existant du plein/relevé, pour
 // comparer facilement la lecture Claude Vision (affichée là-bas) au km saisi.
+const PHOTO_LABELS = Object.fromEntries(PHOTO_TYPES.map(({ type, label }) => [type, label]));
+
+/** Photo dont l'URL signée n'a pas pu être générée (api.js signPhoto) : espace
+ *  réservé à la place de la miniature, message exact au survol. */
+function thumbErrorHtml(p) {
+  return `<span class="validation-thumb-sm thumb-error" title="${escapeHtml(p.signError)}">!</span>`;
+}
+
+/** DIAGNOSTIC — liste lisible (pas seulement au survol : inutilisable sur mobile) des
+ *  photos non chargées, avec le message exact à rapporter mot pour mot. */
+function photoErrorsHtml(lines) {
+  if (lines.length === 0) return '';
+  return `
+    <div class="photo-errors">
+      <p class="error">Photos non chargées (${lines.length}) — message exact :</p>
+      <ul>${lines.map((l) => `<li>${escapeHtml(l)}</li>`).join('')}</ul>
+    </div>
+  `;
+}
+
 function validationThumbsHtml(item) {
   if (item.photos.length === 0) return '<span class="empty-text">—</span>';
   const href = item.kind === 'fuel' ? `#/fuel-event/${item.id}` : `#/logbook-entry/${item.id}`;
-  return `<a class="validation-thumbs" href="${href}">${item.photos.map((p) => `<img class="validation-thumb-sm" src="${p.signedUrl}" alt="${escapeHtml(p.type)}">`).join('')}</a>`;
+  return `<a class="validation-thumbs" href="${href}">${item.photos
+    .map((p) => (p.signedUrl ? `<img class="validation-thumb-sm" src="${p.signedUrl}" alt="${escapeHtml(p.type)}">` : thumbErrorHtml(p)))
+    .join('')}</a>`;
 }
 
 // ---------- OCR compteur (0009_ocr_odometer.sql) ----------
@@ -1795,6 +1823,13 @@ async function renderValidation() {
     ${topBarHtml('Tableau de bord')}
     <div class="screen-dashboard">
     <p class="error" id="validation-error" hidden></p>
+    ${photoErrorsHtml(
+      [...pending, ...done].flatMap((item) =>
+        item.photos
+          .filter((p) => p.signError)
+          .map((p) => `${item.kind === 'fuel' ? 'Plein' : 'Relevé'} · ${item.vehicleName} · ${item.date} · ${PHOTO_LABELS[p.type] ?? p.type} : ${p.signError}`)
+      )
+    )}
 
     <div class="section-label">À valider (${pending.length})</div>
     <div class="btn-row">

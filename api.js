@@ -1,7 +1,7 @@
 // Couche data Supabase — port direct des fichiers src/features/*/api.ts de la version
 // React Native, adapté au File/Blob natif du navigateur (input file) au lieu de
 // fetch(uri).arrayBuffer() sur un chemin local RN.
-import { supabase } from './supabase-client.js?v=202609251140';
+import { supabase } from './supabase-client.js?v=202609251419';
 
 export const PHOTO_TYPES = [
   { type: 'vehicle_plate', label: 'Véhicule + plaque' },
@@ -159,11 +159,8 @@ export async function getFuelEvent(id) {
 
   const photos = {};
   for (const row of photoRows ?? []) {
-    const { data: signedData, error: signError } = await supabase.storage
-      .from('fuel-photos')
-      .createSignedUrl(row.storage_path, 3600);
-    if (signError) throw signError;
-    photos[row.type] = { storagePath: row.storage_path, signedUrl: signedData.signedUrl };
+    // Jamais bloquant : une photo introuvable ne doit pas empêcher d'ouvrir le plein.
+    photos[row.type] = { storagePath: row.storage_path, ...(await signPhoto('fuel-photos', row.storage_path)) };
   }
 
   return { ...event, photos };
@@ -271,15 +268,13 @@ export async function getLogbookEntry(id) {
   if (error) throw error;
 
   let photoSignedUrl = null;
+  let photoSignError = null;
   if (data.photo_storage_path) {
-    const { data: signedData, error: signError } = await supabase.storage
-      .from('logbook-photos')
-      .createSignedUrl(data.photo_storage_path, 3600);
-    if (signError) throw signError;
-    photoSignedUrl = signedData.signedUrl;
+    // Jamais bloquant : une photo introuvable ne doit pas empêcher d'ouvrir le relevé.
+    ({ signedUrl: photoSignedUrl, signError: photoSignError } = await signPhoto('logbook-photos', data.photo_storage_path));
   }
 
-  return { ...data, photoSignedUrl };
+  return { ...data, photoSignedUrl, photoSignError };
 }
 
 export async function uploadLogbookEntryPhoto({ logbookEntryId, ownerId, file }) {
@@ -373,15 +368,26 @@ export async function listOpenTripsOnVehicleByOthers(vehicleId) {
 
 // ---------- Validation admin (0005_fleet_multi_user.sql) ----------
 
+/** URL signée (1h) d'une photo. Ne lève JAMAIS : une seule photo en erreur (ex.
+ *  "Object not found" — fichier absent, ou masqué par la RLS de storage.objects)
+ *  faisait échouer tout l'écran via Promise.all. Renvoie { signedUrl, signError } :
+ *  signError = message exact (+ statut HTTP et chemin) à afficher/rapporter tel quel. */
 async function signPhoto(bucket, path) {
-  const { data, error } = await supabase.storage.from(bucket).createSignedUrl(path, 3600);
-  if (error) throw error;
-  return data.signedUrl;
+  try {
+    const { data, error } = await supabase.storage.from(bucket).createSignedUrl(path, 3600);
+    if (error) throw error;
+    return { signedUrl: data.signedUrl, signError: null };
+  } catch (e) {
+    const status = e?.statusCode ?? e?.status;
+    const signError = `${e?.message || String(e)}${status ? ` (HTTP ${status})` : ''} — ${bucket}/${path}`;
+    console.error('[IntelliFleet][photo] URL signée impossible :', signError, e);
+    return { signedUrl: null, signError };
+  }
 }
 
 async function mapValidationFuelRow(row) {
   const photos = await Promise.all(
-    (row.photos ?? []).map(async (p) => ({ type: p.type, signedUrl: await signPhoto('fuel-photos', p.storage_path) }))
+    (row.photos ?? []).map(async (p) => ({ type: p.type, ...(await signPhoto('fuel-photos', p.storage_path)) }))
   );
   return {
     kind: 'fuel',
@@ -408,7 +414,7 @@ async function mapValidationFuelRow(row) {
 
 async function mapValidationLogbookRow(row) {
   const photos = row.photo_storage_path
-    ? [{ type: 'odometer', signedUrl: await signPhoto('logbook-photos', row.photo_storage_path) }]
+    ? [{ type: 'odometer', ...(await signPhoto('logbook-photos', row.photo_storage_path)) }]
     : [];
   return {
     kind: 'logbook',

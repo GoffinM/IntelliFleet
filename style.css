@@ -476,6 +476,25 @@ h1 {
   border-radius: 4px;
 }
 
+/* Miniature dont l'URL signée a échoué (message exact en title) */
+.thumb-error {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--amber-bg);
+  color: var(--amber);
+  font-weight: 700;
+  font-size: 14px;
+}
+
+.photo-errors ul {
+  margin: 4px 0 0;
+  padding-left: 18px;
+  font-size: 12px;
+  color: var(--text-muted);
+  overflow-wrap: anywhere;
+}
+
 .dashboard-scope-banner {
   color: var(--text-muted);
   font-size: 13px;
