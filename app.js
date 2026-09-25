@@ -1206,7 +1206,12 @@ async function renderLogbookEntryForm(editingId, presetVehicleId) {
       state.closeKm = e.target.value;
       renderCloseKmWarning();
     });
-    document.getElementById('f-close-at')?.addEventListener('input', (e) => (state.closeAt = e.target.value));
+    // 'input' ET 'change' : selon le navigateur/téléphone, le sélecteur natif d'un
+    // datetime-local ne déclenche pas toujours 'input' de façon fiable.
+    const closeAtEl = document.getElementById('f-close-at');
+    for (const type of ['input', 'change']) {
+      closeAtEl?.addEventListener(type, (e) => (state.closeAt = e.target.value));
+    }
 
     wirePhotoInputs(document.getElementById('photo-grid'), (_type, file) => {
       revokePreviewUrl(photo.previewUrl);
@@ -1245,6 +1250,22 @@ async function renderLogbookEntryForm(editingId, presetVehicleId) {
     el.hidden = !warning;
   }
 
+  /** DIAGNOSTIC TEMPORAIRE (bug "clôture renseignée mais refusée") — à retirer une
+   *  fois la cause confirmée. Compare ce que l'état a capturé à ce que les champs
+   *  contiennent réellement au moment du clic : état vide + champ rempli = événement
+   *  non reçu ; champ vide aussi = le navigateur considère la saisie incomplète
+   *  (ex. date choisie mais heure restée "--:--", value vaut alors ""). */
+  function closeFieldsDiagnostic() {
+    const kmEl = document.getElementById('f-close-km');
+    const atEl = document.getElementById('f-close-at');
+    const q = (v) => (v === undefined ? 'undefined' : JSON.stringify(v));
+    return (
+      `[Diagnostic — Km clôture : ${q(state.closeKm)} (champ : ${q(kmEl?.value)}) · ` +
+      `Heure clôture : ${q(state.closeAt)} (champ : ${q(atEl?.value)}, ` +
+      `saisie incomplète : ${atEl?.validity?.badInput ? 'oui' : 'non'})]`
+    );
+  }
+
   /** Même patron que le formulaire de plein : partagé entre "Enregistrer" et
    *  "Valider". */
   function validateAndBuildInput() {
@@ -1267,7 +1288,7 @@ async function renderLogbookEntryForm(editingId, presetVehicleId) {
     const closeKmNum = state.closeKm ? parseInt(state.closeKm, 10) : null;
     const closeAtIso = state.closeAt ? new Date(state.closeAt).toISOString() : null;
     if ((closeKmNum != null) !== (closeAtIso != null)) {
-      errorEl.textContent = 'Km de clôture et heure de clôture doivent être renseignés ensemble (ou laissés vides).';
+      errorEl.textContent = `Km de clôture et heure de clôture doivent être renseignés ensemble (ou laissés vides). ${closeFieldsDiagnostic()}`;
       errorEl.hidden = false;
       return null;
     }
