@@ -1,6 +1,6 @@
 // IntelliFleet PWA — routing (hash) + 4 écrans, vanilla JS, sans framework.
-import { supabase } from './supabase-client.js?v=202609251507';
-import { checkKmConsistency } from './km-consistency.js?v=202609251507';
+import { supabase } from './supabase-client.js?v=202609291811';
+import { checkKmConsistency } from './km-consistency.js?v=202609291811';
 import {
   PHOTO_TYPES,
   listVehicles,
@@ -40,8 +40,15 @@ import {
   saveFuelEventOcrResult,
   saveLogbookEntryOcrResult,
   createBugReport,
-} from './api.js?v=202609251507';
-import { buildScopeDashboard, groupVehiclesByFleetGroup, formatMonthLabel, scopeCurrency } from './dashboard.js?v=202609251507';
+} from './api.js?v=202609291811';
+import {
+  buildScopeDashboard,
+  groupVehiclesByFleetGroup,
+  formatMonthLabel,
+  scopeCurrency,
+  maintenanceSignals,
+  maintenanceBannerText,
+} from './dashboard.js?v=202609291811';
 
 const ACTIVE_VEHICLE_KEY = 'intellifleet:active_vehicle_id';
 // Vocabulaire fermé, identique au check SQL (0012_fleet_group_access.sql) : un
@@ -1885,6 +1892,8 @@ async function renderValidation() {
   const pending = [...pendingFuel, ...pendingLogbook].sort(byDateDesc);
   const done = [...doneFuel, ...doneLogbook].sort(byDateDesc);
   const groups = groupVehiclesByFleetGroup(vehicles);
+  // Bandeau de maintenance : fleet-wide, indépendant de la vue de la zone 2.
+  const maintenanceText = maintenanceBannerText(maintenanceSignals(pending, validatedFuelAll, validatedLogbookAll));
 
   if (!dashboardState) {
     dashboardState = {
@@ -1906,6 +1915,7 @@ async function renderValidation() {
           .map((p) => `${item.kind === 'fuel' ? 'Plein' : 'Relevé'} · ${item.vehicleName} · ${item.date} · ${PHOTO_LABELS[p.type] ?? p.type} : ${p.signError}`)
       )
     )}
+    ${maintenanceText ? `<p class="dashboard-scope-banner maintenance-banner">${escapeHtml(maintenanceText)}</p>` : ''}
 
     <div class="section-label">À valider (${pending.length})</div>
     <div class="btn-row">

@@ -158,3 +158,41 @@ export function scopeCurrency(vehicles, vehicleIds) {
     mixed: currencies.length > 1,
   };
 }
+
+/** Signaux de maintenance (bandeau en haut de #/validation), TOUJOURS fleet-wide —
+ *  calculés à partir des données déjà chargées par l'écran, aucune requête dédiée :
+ *  - pending : entrées en attente (listUnvalidated*, déjà sans limite ni filtre) ;
+ *    l'âge part de created_at (saisie dans l'app), pas d'event_date — c'est le
+ *    retard de VALIDATION qui compte, une date de plein antidatée n'en est pas un ;
+ *  - validatedFuel / validatedLogbook : TOUTES les entrées validées (listValidated*All,
+ *    pas la liste "Validées récemment" limitée à 20) — photos non nettoyées = au moins
+ *    une ligne photos pour un plein, photo_storage_path non null pour un relevé.
+ *  Pas de seuil "normal/inquiétant" : chiffres bruts, à l'admin de juger. */
+export function maintenanceSignals(pending, validatedFuel, validatedLogbook, now = new Date()) {
+  const oldestCreatedAt = pending.reduce((min, p) => (min == null || p.createdAt < min ? p.createdAt : min), null);
+  const oldestPendingDays =
+    oldestCreatedAt == null ? null : Math.max(0, Math.floor((now - new Date(oldestCreatedAt)) / 86400000));
+  const uncleanedCount =
+    validatedFuel.filter((e) => (e.photos ?? []).length > 0).length +
+    validatedLogbook.filter((e) => e.photo_storage_path != null).length;
+  return { pendingCount: pending.length, oldestPendingDays, uncleanedCount };
+}
+
+/** Texte du bandeau, ou null si rien à signaler (ni attente, ni photos à nettoyer). */
+export function maintenanceBannerText({ pendingCount, oldestPendingDays, uncleanedCount }) {
+  const parts = [];
+  if (pendingCount > 0) {
+    parts.push(`${pendingCount.toLocaleString('fr-FR')} en attente`);
+    parts.push(
+      oldestPendingDays === 0
+        ? "la plus ancienne date d'aujourd'hui"
+        : `la plus ancienne date de ${oldestPendingDays.toLocaleString('fr-FR')} jour${oldestPendingDays > 1 ? 's' : ''}`
+    );
+  }
+  if (uncleanedCount > 0) {
+    parts.push(
+      `${uncleanedCount.toLocaleString('fr-FR')} entrée${uncleanedCount > 1 ? 's' : ''} validée${uncleanedCount > 1 ? 's' : ''} avec photos non nettoyées`
+    );
+  }
+  return parts.length > 0 ? parts.join(' · ') : null;
+}
