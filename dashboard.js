@@ -196,3 +196,13 @@ export function maintenanceBannerText({ pendingCount, oldestPendingDays, unclean
   }
   return parts.length > 0 ? parts.join(' · ') : null;
 }
+
+/** Valeur tracée par le graphique d'évolution mensuelle pour une ligne de
+ *  computeMonthlyStats — lue telle quelle, aucun recalcul : 'cost' -> amount,
+ *  'km' -> km (le même que la colonne Km du tableau mensuel), 'consumption' ->
+ *  litersPer100km (null si pas de km ce mois-là, point alors omis). */
+export function chartMetricValue(row, metric) {
+  if (metric === 'cost') return row.amount;
+  if (metric === 'km') return row.km;
+  return row.litersPer100km;
+}

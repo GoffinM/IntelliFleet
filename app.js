@@ -1,6 +1,6 @@
 // IntelliFleet PWA — routing (hash) + 4 écrans, vanilla JS, sans framework.
-import { supabase } from './supabase-client.js?v=202609291811';
-import { checkKmConsistency } from './km-consistency.js?v=202609291811';
+import { supabase } from './supabase-client.js?v=202609291824';
+import { checkKmConsistency } from './km-consistency.js?v=202609291824';
 import {
   PHOTO_TYPES,
   listVehicles,
@@ -40,7 +40,7 @@ import {
   saveFuelEventOcrResult,
   saveLogbookEntryOcrResult,
   createBugReport,
-} from './api.js?v=202609291811';
+} from './api.js?v=202609291824';
 import {
   buildScopeDashboard,
   groupVehiclesByFleetGroup,
@@ -48,7 +48,8 @@ import {
   scopeCurrency,
   maintenanceSignals,
   maintenanceBannerText,
-} from './dashboard.js?v=202609291811';
+  chartMetricValue,
+} from './dashboard.js?v=202609291824';
 
 const ACTIVE_VEHICLE_KEY = 'intellifleet:active_vehicle_id';
 // Vocabulaire fermé, identique au check SQL (0012_fleet_group_access.sql) : un
@@ -1792,7 +1793,7 @@ function dashboardChartSvg(monthlyAsc, metric, mixedCurrency) {
   const height = 130;
   const padding = 22;
   const points = monthlyAsc
-    .map((r) => ({ month: r.month, value: metric === 'cost' ? r.amount : r.litersPer100km }))
+    .map((r) => ({ month: r.month, value: chartMetricValue(r, metric) }))
     .filter((p) => p.value != null);
 
   if (points.length === 0) {
@@ -2234,6 +2235,7 @@ async function renderValidation() {
           <div class="chip-row">
             <button class="chip ${dashboardState.metric === 'cost' ? 'active' : ''}" data-metric="cost">Coût</button>
             <button class="chip ${dashboardState.metric === 'consumption' ? 'active' : ''}" data-metric="consumption">Consommation</button>
+            <button class="chip ${dashboardState.metric === 'km' ? 'active' : ''}" data-metric="km">Km</button>
           </div>
           ${dashboardChartSvg(monthlyAsc, dashboardState.metric, mixedCurrency)}
         </div>
