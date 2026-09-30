@@ -1,6 +1,6 @@
 // IntelliFleet PWA — routing (hash) + 4 écrans, vanilla JS, sans framework.
-import { supabase } from './supabase-client.js?v=202609291824';
-import { checkKmConsistency } from './km-consistency.js?v=202609291824';
+import { supabase } from './supabase-client.js?v=202609301802';
+import { checkKmConsistency } from './km-consistency.js?v=202609301802';
 import {
   PHOTO_TYPES,
   listVehicles,
@@ -40,7 +40,7 @@ import {
   saveFuelEventOcrResult,
   saveLogbookEntryOcrResult,
   createBugReport,
-} from './api.js?v=202609291824';
+} from './api.js?v=202609301802';
 import {
   buildScopeDashboard,
   groupVehiclesByFleetGroup,
@@ -49,7 +49,7 @@ import {
   maintenanceSignals,
   maintenanceBannerText,
   chartMetricValue,
-} from './dashboard.js?v=202609291824';
+} from './dashboard.js?v=202609301802';
 
 const ACTIVE_VEHICLE_KEY = 'intellifleet:active_vehicle_id';
 // Vocabulaire fermé, identique au check SQL (0012_fleet_group_access.sql) : un
@@ -1798,6 +1798,21 @@ function dashboardChartSvg(monthlyAsc, metric, mixedCurrency) {
 
   if (points.length === 0) {
     return '<p class="empty-text">Pas assez de données pour le graphique.</p>';
+  }
+
+  // Un seul mois représenté (fréquent en début de bêta) : sans ça le point
+  // tombait dans le coin bas-gauche, minuscule, avec deux étiquettes de mois
+  // superposées ("2026sept. 2026") — graphique qui avait l'air vide.
+  if (points.length === 1) {
+    const cx = (width / 2).toFixed(1);
+    const cy = ((height - padding) / 2).toFixed(1);
+    return `
+    <svg viewBox="0 0 ${width} ${height}" class="chart-svg" role="img" aria-label="Évolution mensuelle">
+      <circle cx="${cx}" cy="${cy}" r="11" fill="var(--blue)" fill-opacity="0.18"></circle>
+      <circle cx="${cx}" cy="${cy}" r="6" fill="var(--blue)"></circle>
+      <text x="${cx}" y="${height - 6}" text-anchor="middle" font-size="9" fill="var(--text-muted)">${escapeHtml(formatMonthLabel(points[0].month))}</text>
+    </svg>
+  `;
   }
 
   const values = points.map((p) => p.value);
